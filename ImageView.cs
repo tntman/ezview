@@ -246,6 +246,12 @@ class ImageView : Control, ICustomHitTest
     protected override void OnSizeChanged(SizeChangedEventArgs e)
     {
         _drag = null; // a double-click resizing the window must not turn into a pan
+        // Keep the same point in the middle of the view (a centered 1:1 image stays centered in fullscreen).
+        if (!_fit && e.PreviousSize.Width > 0)
+        {
+            _x += (e.NewSize.Width - e.PreviousSize.Width) / 2;
+            _y += (e.NewSize.Height - e.PreviousSize.Height) / 2;
+        }
         UpdateClip();
         Redraw();
     }
