@@ -17,7 +17,7 @@ Built with C# / .NET 9 and Avalonia, on top of [libmpv](https://mpv.io), [ImageM
 ## Features
 
 - Chromeless dark window, frosted top bar and player bar that fade out while you watch
-- Player bar with timeline, frame numbers, loop (off / file / queue) and volume; frame stepping with ← →
+- Player bar with timeline, frame numbers, loop (off / file / queue) and volume; frame stepping with , . and 5 s jumps with ← →
 - Queue panel (Q), info panel with full metadata and EXIF (I), right-click menu
 - 3D: Houdini-style navigation (LMB tumble, MMB pan, RMB dolly), wireframe (W), grid (G), textures on/off (T), skeleton (B), outliner with visibility and solo (O)
 - Can register itself for all supported file types (`ezview --register`)

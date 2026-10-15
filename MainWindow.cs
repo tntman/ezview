@@ -232,8 +232,9 @@ class MainWindow : Window
             ]),
             ("Video", [
                 ("Space  K", "Play / pause"),
-                ("← →  , .", "One frame back / forward"),
-                ("Shift+← →  J L  Ctrl+← →", "Jump 5 s / 10 s / 60 s"),
+                ("← →", "Back / forward 5 s, keeps playing"),
+                (",  .", "One frame back / forward (← → in sequences)"),
+                ("J L  Ctrl+← →", "Jump 10 s / 60 s"),
                 ("Home  0–9", "Start / jump to 0–90 %"),
                 ("[  ]  Backspace", "Slower / faster / normal speed"),
                 ("↑ ↓  Wheel  M", "Volume / mute"),
@@ -533,6 +534,9 @@ class MainWindow : Window
             case Key.Right when ctrl && pl != null: pl.Seek(60); break;
             case Key.Left when shift && pl != null: pl.Seek(-5); break;
             case Key.Right when shift && pl != null: pl.Seek(5); break;
+            // Video: arrows jump 5 s and keep playing; sequences and 3D step frames, as do , and . everywhere.
+            case Key.Left when v != null && Current?.IsSequence != true: v.Seek(-5); break;
+            case Key.Right when v != null && Current?.IsSequence != true: v.Seek(5); break;
             case Key.Left or Key.OemComma when pl != null: pl.StepFrame(-1); break;
             case Key.Right or Key.OemPeriod when pl != null: pl.StepFrame(1); break;
             case Key.J when pl != null: pl.Seek(-10); break;
