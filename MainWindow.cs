@@ -357,6 +357,7 @@ class MainWindow : Window
             case Key.S when v != null: v.Screenshot(); break;
             case Key.H when _kind == Kind.Model: _model!.Reset(); break;
             case Key.B when _kind == Kind.Model: _model!.ToggleSkeleton(); break;
+            case Key.M when _kind == Kind.Model: _model!.ToggleGeometry(); break;
             case Key.O when !ctrl && _kind == Kind.Model: TogglePanel(_outliner.View); break;
             case Key.W when _kind == Kind.Model: _model!.ToggleWireframe(); break;
             case Key.G when _kind == Kind.Model: _model!.ToggleGrid(); break;
@@ -467,6 +468,7 @@ class MainWindow : Window
             if (_model!.IsAnimated) items.Add(Item(_model.Paused ? "" : "", _model.Paused ? "Play" : "Pause", _model.TogglePause, "Space"));
             items.Add(Item("", "Wireframe", _model!.ToggleWireframe, "W", _model.Wireframe));
             items.Add(Item("", "Grid", _model.ToggleGrid, "G", _model.ShowGrid));
+            items.Add(Item("\uF158", "Geometry", _model.ToggleGeometry, "M", _model.ShowGeometry));
             if (_model.HasSkeleton) items.Add(Item("\uE805", "Skeleton", _model.ToggleSkeleton, "B", _model.ShowSkeleton));
             items.Add(Item("", "Textures and materials", _model.ToggleTextures, "T", _model.Textures));
         }

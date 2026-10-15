@@ -271,6 +271,8 @@ class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
     public bool ShowSkeleton { get; private set; } = true;
     public void ToggleSkeleton() { ShowSkeleton = !ShowSkeleton; RequestNextFrameRendering(); }
     public bool HasSkeleton => _scene is { Bones.Count: > 0 };
+    public bool ShowGeometry { get; private set; } = true;
+    public void ToggleGeometry() { ShowGeometry = !ShowGeometry; RequestNextFrameRendering(); }
     uint _boneVao, _boneVbo;
 
     public static string DumpSkeleton(string path)
@@ -306,15 +308,18 @@ class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
             var channels = new Dictionary<string, nint>();
             for (int c = 0; anim != null && c < anim->MNumChannels; c++)
                 channels[anim->MChannels[c]->MNodeName.AsString] = (nint)anim->MChannels[c];
-            // Joints = animated or skinning nodes; helper nodes like the armature object aren't drawn as bones.
+            // Assimp splits each FBX joint into "<name>_$AssimpFbx$_Translation/_PreRotation/_Rotation…" helper nodes,
+            // and the animation channels sit on those helpers. A joint is therefore known by its base name.
+            static string Base(string n) => n.IndexOf("_$AssimpFbx$_", StringComparison.Ordinal) is var i and >= 0 ? n[..i] : n;
             var skin = new HashSet<string>();
             for (int i = 0; i < s->MNumMeshes; i++)
                 for (int b = 0; b < s->MMeshes[i]->MNumBones; b++) skin.Add(s->MMeshes[i]->MBones[b]->MName.AsString);
-            var joints = new HashSet<string>(channels.Keys.Concat(skin));
-            var parentName = new Dictionary<AnimNode, string>();
-            var topLevel = new HashSet<AnimNode>();
+            var joints = new HashSet<string>(channels.Keys.Select(Base).Concat(skin));
+            var bones = new List<(AnimNode Joint, AnimNode Parent)>();
+            var topmost = new HashSet<AnimNode>();
 
-            void Walk(Ai.Node* n, AnimNode? parent, OutlineNode outParent, bool isRoot)
+            // jointAbove: the nearest real (non-helper) joint up the tree; bones connect real joints, skipping helpers.
+            void Walk(Ai.Node* n, AnimNode? parent, OutlineNode outParent, bool isRoot, AnimNode? jointAbove)
             {
                 var name = n->MName.AsString;
                 var node = new AnimNode { Parent = parent };
@@ -324,16 +329,27 @@ class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
                     node.Locals = times.Select(t => Sample((Ai.NodeAnim*)ch, t * tps)).ToArray();
                 }
                 else node.Locals = [Matrix4x4.Transpose(n->MTransformation)]; // assimp matrices are column-vector
-                var outline = isRoot ? outParent : outParent.Add(name, joints.Contains(name) ? "Joint" : "Xform");
-                parentName[node] = name;
-                if (n->MParent == s->MRootNode) topLevel.Add(node);
-                bool IsJoint(string nm) => joints.Count == 0 || joints.Contains(nm);
-                // A top-level parent is usually the armature/rig object, not a bone (unless a mesh is skinned to it).
-                bool parentIsBone = parent != null && IsJoint(parentName[parent]) && (!topLevel.Contains(parent) || skin.Contains(parentName[parent]));
-                if (!isRoot && n->MParent != s->MRootNode && IsJoint(name) && parentIsBone) scene.Bones.Add((node, parent!));
-                for (int i = 0; i < n->MNumChildren; i++) Walk(n->MChildren[i], node, outline, false);
+                bool helper = name.Contains("_$AssimpFbx$_");
+                // End joints (Mixamo "HeadTop_End") have no channel but finish the chain they hang off.
+                bool isJoint = !isRoot && !helper && (joints.Count == 0 || joints.Contains(name) || (n->MNumChildren == 0 && jointAbove != null));
+                var outline = isRoot || helper ? outParent : outParent.Add(name, isJoint ? "Joint" : "Xform");
+                if (isJoint)
+                {
+                    if (jointAbove != null) bones.Add((node, jointAbove));
+                    else topmost.Add(node);
+                }
+                for (int i = 0; i < n->MNumChildren; i++) Walk(n->MChildren[i], node, outline, false, isJoint ? node : jointAbove);
             }
-            Walk(s->MRootNode, null, scene.Outline, true);
+            Walk(s->MRootNode, null, scene.Outline, true, null);
+
+            // A topmost joint at the origin with a single child is a rig container (Blender's armature object), not a bone.
+            foreach (var top in topmost)
+            {
+                var kids = bones.Where(b => b.Parent == top).ToList();
+                if (kids.Count == 1 && top.WorldAt(0).Translation.Length() < 1e-3f * (1 + kids[0].Joint.WorldAt(0).Translation.Length()))
+                    bones.Remove(kids[0]);
+            }
+            scene.Bones = bones;
             return scene.Bones.Count > 0 || anim != null ? scene : null;
         }
         finally { ai.ReleaseImport(s); }
@@ -387,7 +403,9 @@ class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
     static (Vector3, Vector3) BoneBounds(AnimScene scene)
     {
         Vector3 min = new(float.MaxValue), max = new(float.MinValue);
-        foreach (var f in new[] { 0, scene.FrameCount / 2, scene.FrameCount - 1 })
+        // Joints are cheap, so frame the whole animation (up to 300 evenly spaced frames).
+        int step = Math.Max(1, scene.FrameCount / 300);
+        for (int f = 0; f < scene.FrameCount; f += step)
             foreach (var (j, _) in scene.Bones)
             {
                 var p = (j.WorldAt(scene.TimeOf(f)) * scene.Root).Translation;
@@ -432,7 +450,7 @@ class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
         _target = _center;
         _yaw = 0.6f;
         _pitch = -0.35f;
-        _dist = _radius * 2.6f;
+        _dist = _radius * 3.2f; // the whole bounding sphere plus room for the bars
         RequestNextFrameRendering();
     }
 
@@ -775,7 +793,8 @@ class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
             gl.DrawArrays(PrimitiveType.Lines, 0, (uint)_gridCount);
         }
 
-        if (Wireframe)
+        if (!ShowGeometry) { } // hidden: only grid and skeleton
+        else if (Wireframe)
         {
             gl.Uniform1(unlitLoc, 1);
             gl.Uniform4(colLoc, 0.78f, 0.78f, 0.78f, 1f);
