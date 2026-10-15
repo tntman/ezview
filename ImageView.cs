@@ -38,6 +38,7 @@ class ImageView : Control, ICustomHitTest
     {
         _layer = new BlurLayer(this) { Effect = new BlurEffect { Radius = 40 }, IsHitTestVisible = false, IsVisible = false };
         VisualChildren.Add(_layer);
+        VisualChildren.Add(_loupe);
     }
 
     public void SetStrips(double top, double bottom, double opacity)
@@ -231,11 +232,13 @@ class ImageView : Control, ICustomHitTest
         e.Handled = true;
     }
 
+    Point _pressAt;
+
     protected override void OnPointerPressed(PointerPressedEventArgs e)
     {
         var props = e.GetCurrentPoint(this).Properties;
         if (!props.IsLeftButtonPressed && !props.IsMiddleButtonPressed) return;
-        _drag = e.GetPosition(this);
+        _drag = _pressAt = e.GetPosition(this);
         e.Pointer.Capture(this);
     }
 
@@ -252,21 +255,105 @@ class ImageView : Control, ICustomHitTest
     }
 
     // Pixel under the pointer (image coordinates: one image pixel spans _zoom DIPs).
+    (int X, int Y)? PixelAt(Point p)
+    {
+        if (_src == null) return null;
+        int x = (int)Math.Floor((p.X - _x) / _zoom), y = (int)Math.Floor((p.Y - _y) / _zoom);
+        return x < 0 || y < 0 || x >= _sw || y >= _sh ? null : (x, y);
+    }
+
     void Inspect(Point p)
     {
         if (_bmp == null) return;
         if (_src == null) { _ = EnsureSource(); return; }
-        int x = (int)Math.Floor((p.X - _x) / _zoom), y = (int)Math.Floor((p.Y - _y) / _zoom);
-        if (x < 0 || y < 0 || x >= _sw || y >= _sh) { PixelLeft?.Invoke(); return; }
+        if (PixelAt(p) is not var (x, y)) { PixelLeft?.Invoke(); _loupe.Hide(); return; }
         int i = (y * _sw + x) * 4;
         PixelHovered?.Invoke(x, y, _src[i + 2], _src[i + 1], _src[i], _src[i + 3]);
+        if (Loupe) _loupe.Show(p, x, y, _src, _sw, _sh);
+        else _loupe.Hide();
     }
 
-    protected override void OnPointerExited(PointerEventArgs e) => PixelLeft?.Invoke();
+    protected override void OnPointerExited(PointerEventArgs e)
+    {
+        PixelLeft?.Invoke();
+        _loupe.Hide();
+    }
 
     protected override void OnPointerReleased(PointerReleasedEventArgs e)
     {
+        // A left click that didn't pan picks the pixel (the panel locks/unlocks it).
+        var p = e.GetPosition(this);
+        if (Inspecting && e.InitialPressMouseButton == MouseButton.Left && Math.Abs(p.X - _pressAt.X) + Math.Abs(p.Y - _pressAt.Y) < 4
+            && PixelAt(p) is var (x, y))
+        {
+            int i = (y * _sw + x) * 4;
+            PixelClicked?.Invoke(x, y, _src![i + 2], _src[i + 1], _src[i], _src[i + 3]);
+        }
         _drag = null;
         e.Pointer.Capture(null);
+    }
+
+    public event Action<int, int, byte, byte, byte, byte>? PixelClicked;
+    public bool Loupe = true;
+    readonly LoupeView _loupe = new() { IsHitTestVisible = false };
+
+    // Magnifier next to the pointer: 11x11 source pixels, nearest-neighbour, grid and a marked center pixel.
+    sealed class LoupeView : Control
+    {
+        const int N = 11, Cell = 14, Size = N * Cell;
+        readonly WriteableBitmap _bmp = new(new PixelSize(N, N), new Vector(96, 96), PixelFormat.Bgra8888, AlphaFormat.Unpremul);
+        Point _at;
+        bool _shown;
+
+        public unsafe void Show(Point at, int cx, int cy, byte[] src, int w, int h)
+        {
+            using (var fb = _bmp.Lock())
+                for (int y = 0; y < N; y++)
+                {
+                    var row = (byte*)fb.Address + y * fb.RowBytes;
+                    for (int x = 0; x < N; x++)
+                    {
+                        int sx = cx + x - N / 2, sy = cy + y - N / 2;
+                        if (sx < 0 || sy < 0 || sx >= w || sy >= h) { row[x * 4] = row[x * 4 + 1] = row[x * 4 + 2] = 14; row[x * 4 + 3] = 255; continue; }
+                        int i = (sy * w + sx) * 4;
+                        row[x * 4] = src[i]; row[x * 4 + 1] = src[i + 1]; row[x * 4 + 2] = src[i + 2]; row[x * 4 + 3] = 255; // opaque, so alpha doesn't hide color
+                    }
+                }
+            (_at, _shown) = (at, true);
+            InvalidateVisual();
+        }
+
+        public void Hide()
+        {
+            if (!_shown) return;
+            _shown = false;
+            InvalidateVisual();
+        }
+
+        public override void Render(DrawingContext ctx)
+        {
+            if (!_shown) return;
+            // Below-right of the pointer, flipped to stay inside the view.
+            double x = _at.X + 24, y = _at.Y + 24;
+            if (x + Size > Bounds.Width) x = _at.X - 24 - Size;
+            if (y + Size > Bounds.Height) y = _at.Y - 24 - Size;
+            var box = new Rect(x, y, Size, Size);
+            var clip = new RoundedRect(box, 10);
+            using (ctx.PushClip(clip))
+            {
+                using (ctx.PushRenderOptions(new RenderOptions { BitmapInterpolationMode = BitmapInterpolationMode.None }))
+                    ctx.DrawImage(_bmp, new Rect(0, 0, N, N), box);
+                var grid = new Pen(new SolidColorBrush(Color.FromArgb(40, 0, 0, 0)), 1);
+                for (int i = 1; i < N; i++)
+                {
+                    ctx.DrawLine(grid, new Point(x + i * Cell, y), new Point(x + i * Cell, y + Size));
+                    ctx.DrawLine(grid, new Point(x, y + i * Cell), new Point(x + Size, y + i * Cell));
+                }
+                var center = new Rect(x + N / 2 * Cell, y + N / 2 * Cell, Cell, Cell);
+                ctx.DrawRectangle(null, new Pen(Brushes.Black, 3), center);
+                ctx.DrawRectangle(null, new Pen(Ui.Accent, 1.5), center);
+            }
+            ctx.DrawRectangle(null, new Pen(Ui.Edge, 1), clip);
+        }
     }
 }

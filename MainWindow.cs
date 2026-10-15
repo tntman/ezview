@@ -393,6 +393,7 @@ class MainWindow : Window
             case Key.Escape when _kind == Kind.Model && _model!.Selected != null: _model.Select(null); break;
             case Key.Escape: if (WindowState == WindowState.FullScreen) ToggleFullscreen(); else Close(); break;
             case Key.O when ctrl: OpenDialog(); break;
+            case Key.C when ctrl && _kind == Kind.Image && _imagePanel.View.IsVisible: _imagePanel.CopyHex(); break;
             case Key.D0 or Key.NumPad0: ResetView(); break;
             case Key.D1 or Key.NumPad1 when _kind == Kind.Image: _image.OneToOne(); break;
             default: return;
