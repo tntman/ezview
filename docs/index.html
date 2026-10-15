@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ezview</title>
-<meta name="description" content="A fast, minimal media viewer for Windows: images, video, image sequences and 3D scenes in one clean, dark window.">
+<meta name="description" content="A fast, minimal media viewer for Windows: images, video, image sequences and 3D scenes in one clean, dark interface.">
 <link rel="icon" href="ezview.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -120,11 +120,12 @@
   <div class="wrap">
     <div>
       <h1>One viewer.<br><span>Every pixel.</span></h1>
-      <p class="lede">A fast, minimal media viewer for Windows. Images, video, image sequences and 3D scenes in one clean, dark window.</p>
+      <p class="lede">A fast, minimal media viewer for Windows. Images, video, image sequences and 3D scenes in one clean, dark interface.</p>
       <div class="cta">
-        <a class="btn primary" href="https://github.com/tntman/ezview">View on GitHub</a>
-        <a class="btn" href="#build">Build it</a>
+        <a class="btn primary" href="https://github.com/tntman/ezview/releases/latest/download/ezview-win-x64.zip">Download for Windows</a>
+        <a class="btn" href="https://github.com/tntman/ezview">View on GitHub</a>
       </div>
+      <p class="stack">Windows 10/11 x64 · ~100 MB zip · unzip and run <code>ezview.exe</code>, no install needed</p>
       <p class="stack">C# / .NET 9 · Avalonia · libmpv · ImageMagick · Assimp · own Alembic, USD and Quake 3 readers</p>
     </div>
     <img class="hero-logo" src="ezview.svg" alt="ezview logo">
@@ -141,8 +142,9 @@
       <figure><a href="shots/photo-info.jpg"><img src="shots/photo-info.jpg" width="1440" height="900" alt="JPEG photo with the info panel showing metadata and EXIF" loading="lazy"></a><figcaption><b>JPEG</b> · info panel with metadata and EXIF</figcaption></figure>
       <figure><a href="shots/video.jpg"><img src="shots/video.jpg" width="1440" height="900" alt="AV1 video playing with the player bar" loading="lazy"></a><figcaption><b>AV1 / MKV</b> · player bar with frame counter</figcaption></figure>
       <figure><a href="shots/sequence.jpg"><img src="shots/sequence.jpg" width="1440" height="900" alt="EXR image sequence playing as a clip with frame numbers" loading="lazy"></a><figcaption><b>Image sequence</b> · shot.[1001–1048].exr as one clip</figcaption></figure>
+      <figure><a href="shots/usd-walk.jpg"><img src="shots/usd-walk.jpg" width="1440" height="900" alt="Skinned USD character walking with the skeleton shown" loading="lazy"></a><figcaption><b>UsdSkel</b> · skinned character walk cycle with skeleton (B)</figcaption></figure>
       <figure><a href="shots/anim-abc.jpg"><img src="shots/anim-abc.jpg" width="1440" height="900" alt="Animated Alembic scene playing with the timeline" loading="lazy"></a><figcaption><b>Alembic</b> · animated 3D scene on a timeline, frame by frame</figcaption></figure>
-      <figure><a href="shots/helmet.jpg"><img src="shots/helmet.jpg" width="1440" height="900" alt="Textured glTF damaged helmet model" loading="lazy"></a><figcaption><b>glTF</b> · textured model</figcaption></figure>
+      <figure><a href="shots/context-menu.jpg"><img src="shots/context-menu.jpg" width="1440" height="900" alt="Right-click menu over a textured glTF model" loading="lazy"></a><figcaption><b>Right-click menu</b> · every action and its shortcut, here on a glTF model</figcaption></figure>
       <figure><a href="shots/fbx-wire.jpg"><img src="shots/fbx-wire.jpg" width="1440" height="900" alt="FBX spider model in wireframe" loading="lazy"></a><figcaption><b>FBX</b> · wireframe (W)</figcaption></figure>
     </div>
   </div>
@@ -158,7 +160,6 @@
       <div class="fmt"><h3>Image sequences</h3><p><code>shot.1001.exr</code>, <code>plate_0001.dpx</code>… play as a clip with real frame numbers.</p></div>
       <div class="fmt"><h3>3D models</h3><p>obj, fbx, gltf/glb, stl, ply, dae, blend, 3ds, Quake md2/md3/mdl, Doom 3 md5 and more.</p></div>
       <div class="fmt"><h3>3D animation</h3><p>Plays animated sequences: Alembic, USD (usda/usdc/usdz with references, payloads, variants, instancing) and FBX skeletons.</p></div>
-      <div class="fmt"><h3>Quake 3 maps</h3><p>BSP levels straight from <code>.pk3</code>, with textures and lightmaps.</p></div>
     </div>
   </div>
 </section>
@@ -268,7 +269,7 @@ ezview --selftest</pre>
 
 <footer>
   <div class="wrap">
-    <span>ezview · built on libmpv, ImageMagick and Assimp<br>Screenshots: Kitchen Set © Pixar · Damaged Helmet by theblueturtle_ (CC BY 4.0)</span>
+    <span>ezview · built on libmpv, ImageMagick and Assimp<br>Screenshots: Kitchen Set and HumanFemale © Pixar · Damaged Helmet by theblueturtle_ (CC BY 4.0)</span>
     <a href="https://github.com/tntman/ezview">github.com/tntman/ezview</a>
   </div>
 </footer>
