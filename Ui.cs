@@ -29,6 +29,12 @@ static class Ui
         Text = text.ToUpperInvariant(), FontSize = 11, LetterSpacing = 1.2, Foreground = Muted, Margin = new(20, 20, 20, 8),
     };
 
+    public static Slider Slider(double min, double max, double value) => new()
+    {
+        Minimum = min, Maximum = max, Value = value, SmallChange = (max - min) / 100, LargeChange = (max - min) / 10,
+        VerticalAlignment = VerticalAlignment.Center, Focusable = false,
+    };
+
     public static TextBlock Icon(string glyph, double size = 15) => new()
     {
         Text = glyph, FontFamily = Icons, FontSize = size, VerticalAlignment = VerticalAlignment.Center,

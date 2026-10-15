@@ -34,6 +34,8 @@ class App : Application
         Resources["MenuFlyoutSubItemForegroundSubMenuOpened"] = Ui.Accent;
         Resources["OverlayCornerRadius"] = new CornerRadius(10);
         Resources["ToolTipBackground"] = Ui.Surface;
+        foreach (var k in new[] { "SliderTrackValueFill", "SliderTrackValueFillPointerOver", "SliderTrackValueFillPressed", "SliderThumbBackground", "SliderThumbBackgroundPointerOver", "SliderThumbBackgroundPressed" })
+            Resources[k] = Ui.Accent;
 
         Styles.Add(new Style(x => x.OfType<MenuItem>())
         {

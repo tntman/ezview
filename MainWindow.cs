@@ -27,6 +27,7 @@ class MainWindow : Window
     readonly QueuePanel _queuePanel;
     readonly InfoPanel _info = new();
     readonly OutlinerPanel _outliner;
+    readonly ImagePanel _imagePanel;
     readonly DispatcherTimer _hide = new() { Interval = TimeSpan.FromSeconds(1.5) };
     readonly DispatcherTimer _tick = new() { Interval = TimeSpan.FromMilliseconds(250) };
 
@@ -74,6 +75,7 @@ class MainWindow : Window
         _bottom = new PlayBar(() => Player, Step, CycleLoop, TogglePlayQueue) { IsVisible = false };
         _bottom.SetPlayQueue(_playQueue);
         _bottom.SetLoop(_loop);
+        _imagePanel = new ImagePanel(_image);
         _outliner = new OutlinerPanel(() => _kind == Kind.Model ? _model : null);
         _queuePanel = new QueuePanel(i => { _index = i; _ = ShowCurrent(); }, RemoveAt, () => AddFilesDialog());
 
@@ -81,7 +83,7 @@ class MainWindow : Window
         _overlay.Children.Add(_bottom);
         _host.Children.Add(_image);
         _host.Children.Add(_msg);
-        Content = new Panel { Children = { _host, _queuePanel.View, _outliner.View, _info.View, _overlay } };
+        Content = new Panel { Children = { _host, _queuePanel.View, _outliner.View, _info.View, _imagePanel.View, _overlay } };
 
         AddHandler(KeyDownEvent, OnKey, Avalonia.Interactivity.RoutingStrategies.Tunnel);
         AddHandler(KeyUpEvent, (_, e) =>
@@ -108,7 +110,7 @@ class MainWindow : Window
         }, Avalonia.Interactivity.RoutingStrategies.Tunnel, true);
         AddHandler(DoubleTappedEvent, (_, e) =>
         {
-            if (e.Source is Visual v && (v.FindAncestorOfType<Button>(true) != null || _bottom.IsPointerOver || _queuePanel.View.IsPointerOver || _outliner.View.IsPointerOver || _info.View.IsPointerOver)) return;
+            if (e.Source is Visual v && (v.FindAncestorOfType<Button>(true) != null || _bottom.IsPointerOver || _queuePanel.View.IsPointerOver || _outliner.View.IsPointerOver || _info.View.IsPointerOver || _imagePanel.View.IsPointerOver)) return;
             _video?.CancelClick(); // a double-click means fullscreen, never play/pause
             ToggleFullscreen();
         }, Avalonia.Interactivity.RoutingStrategies.Bubble, true);
@@ -302,6 +304,7 @@ class MainWindow : Window
         _bottom.IsVisible = kind == Kind.Video;
         _bottom.SetMediaControls(kind == Kind.Video);
         if (kind != Kind.Model) _outliner.View.IsVisible = false;
+        if (kind != Kind.Image) _imagePanel.View.IsVisible = false;
         _host.Background = kind == Kind.Video ? Brushes.Black : Ui.Bg;
         UpdateStrips();
     }
@@ -310,7 +313,7 @@ class MainWindow : Window
     {
         double top = _top.Height, bottom = _bottom.IsVisible ? _bottom.Height : 0, opacity = _overlay.Opacity;
         // Side panels stop above the player bar so their bottom row isn't hidden under it.
-        _queuePanel.View.Margin = _outliner.View.Margin = _info.View.Margin = new(Ui.Gap, top + Ui.Gap, Ui.Gap, bottom + Ui.Gap);
+        _queuePanel.View.Margin = _outliner.View.Margin = _info.View.Margin = _imagePanel.View.Margin = new(Ui.Gap, top + Ui.Gap, Ui.Gap, bottom + Ui.Gap);
         _image.SetStrips(top, bottom, opacity);
         foreach (var blur in new[] { _video?.Blur, _model?.Blur })
             if (blur != null) (blur.Top, blur.Bottom, blur.Opacity) = (top, bottom, opacity);
@@ -372,6 +375,7 @@ class MainWindow : Window
             case Key.M when v != null: v.ToggleMute(); break;
             case Key.S when v != null: v.Screenshot(); break;
             case Key.H when _kind == Kind.Model: _model!.Reset(); break;
+            case Key.E when _kind == Kind.Image: TogglePanel(_imagePanel.View); break;
             case Key.B when _kind == Kind.Model: _model!.ToggleSkeleton(); break;
             case Key.M when _kind == Kind.Model: _model!.ToggleGeometry(); break;
             case Key.O when !ctrl && _kind == Kind.Model: TogglePanel(_outliner.View); break;
@@ -409,6 +413,9 @@ class MainWindow : Window
         // The queue and the outliner share the left edge.
         if (panel.IsVisible && panel == _outliner.View) _queuePanel.View.IsVisible = false;
         if (panel.IsVisible && panel == _queuePanel.View) _outliner.View.IsVisible = false;
+        // Info and image adjustments share the right edge.
+        if (panel.IsVisible && panel == _imagePanel.View) { _info.View.IsVisible = false; _imagePanel.Sync(); }
+        if (panel.IsVisible && panel == _info.View) _imagePanel.View.IsVisible = false;
         if (panel == _outliner.View) _outliner.Refresh();
         if (panel == _queuePanel.View) RefreshQueue();
         else RefreshInfo();
@@ -478,6 +485,7 @@ class MainWindow : Window
             Group(items);
             items.Add(Item("", "Fit to window", ResetView, "D0"));
             items.Add(Item("", "Actual size", _image.OneToOne, "D1"));
+            items.Add(Item("\uE790", "Adjust image\u2026", () => TogglePanel(_imagePanel.View), "E", _imagePanel.View.IsVisible || _image.Adjusted));
         }
         else if (_kind == Kind.Model)
         {
@@ -674,6 +682,6 @@ class MainWindow : Window
         _overlay.Opacity = 0;
         _overlay.IsHitTestVisible = false;
         // Keep the cursor while it's over an open side panel.
-        if (!_queuePanel.View.IsPointerOver && !_outliner.View.IsPointerOver && !_info.View.IsPointerOver) Cursor = new Cursor(StandardCursorType.None);
+        if (!_queuePanel.View.IsPointerOver && !_outliner.View.IsPointerOver && !_info.View.IsPointerOver && !_imagePanel.View.IsPointerOver) Cursor = new Cursor(StandardCursorType.None);
     }
 }
