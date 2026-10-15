@@ -85,7 +85,8 @@ class MainWindow : Window
         _host.Children.Add(_image);
         _host.Children.Add(_msg);
         _keysView = KeysView();
-        Content = new Panel { Children = { _host, _queuePanel.View, _outliner.View, _info.View, _imagePanel.View, _overlay, _keysView } };
+        _gallery = new Gallery(this, i => { _index = i; _ = ShowCurrent(); });
+        Content = new Panel { Children = { _host, _queuePanel.View, _outliner.View, _info.View, _imagePanel.View, _overlay, _gallery.View, _keysView } };
 
         AddHandler(KeyDownEvent, OnKey, Avalonia.Interactivity.RoutingStrategies.Tunnel);
         AddHandler(KeyUpEvent, (_, e) =>
@@ -98,7 +99,7 @@ class MainWindow : Window
         // Mouse wheel over a video: volume (side panels keep their own scrolling).
         AddHandler(PointerWheelChangedEvent, (_, e) =>
         {
-            if (_kind != Kind.Video || _video == null || e.Delta.Y == 0 || _keysView.IsVisible
+            if (_kind != Kind.Video || _video == null || e.Delta.Y == 0 || _keysView.IsVisible || _gallery.View.IsVisible
                 || _queuePanel.View.IsPointerOver || _info.View.IsPointerOver) return;
             _video.Volume(e.Delta.Y > 0 ? 5 : -5);
             Poke();
@@ -221,6 +222,10 @@ class MainWindow : Window
         _actualBtn.Foreground = !_image.IsFit && Math.Abs(_image.Zoom - 1) < 1e-6 ? Ui.Accent : Ui.Text;
     }
 
+    // ---- Gallery: every file in the queue as a thumbnail grid (G, or the right-click menu).
+    readonly Gallery _gallery;
+    void ShowGallery() => _gallery.Show(_queue, _index);
+
     // ---- Keyboard shortcuts sheet (F1 or the right-click menu); Esc, the X or a click outside closes it.
     readonly Panel _keysView;
 
@@ -232,6 +237,7 @@ class MainWindow : Window
                 ("← →  PgUp PgDn", "Previous / next file"),
                 ("Double-click  F  F11", "Fullscreen"),
                 ("Q  I", "Queue / info panel"),
+                ("G", "Gallery of the folder (grid in 3D)"),
                 ("Ctrl+O", "Open file"),
                 ("Esc", "Leave fullscreen, close"),
                 ("F1", "This sheet"),
@@ -537,6 +543,12 @@ class MainWindow : Window
             return;
         }
         if (e.Key == Key.F1) { _keysView.IsVisible = true; e.Handled = true; return; }
+        if (_gallery.View.IsVisible)
+        {
+            if (e.Key is Key.Escape or Key.G) _gallery.Hide();
+            e.Handled = true;
+            return;
+        }
         switch (e.Key)
         {
             // Playback (video and animated 3D): arrows step frames, modifiers jump (YouTube/mpv conventions).
@@ -573,6 +585,7 @@ class MainWindow : Window
             case Key.O when !ctrl && _kind == Kind.Model: TogglePanel(_outliner.View); break;
             case Key.W when _kind == Kind.Model: _model!.ToggleWireframe(); break;
             case Key.G when _kind == Kind.Model: _model!.ToggleGrid(); break;
+            case Key.G when _queue.Count > 0: ShowGallery(); break;
             case Key.T when _kind == Kind.Model: _model!.ToggleTextures(); break;
             case Key.R when _kind == Kind.Image: _image.Rotate(shift ? -1 : 1); break;
             case Key.R: CycleLoop(); break;
@@ -708,6 +721,7 @@ class MainWindow : Window
             items.Add(Item("", "Next", () => Step(1), "PageDown"));
         }
         items.Add(Item("", "Show queue", () => TogglePanel(_queuePanel.View), "Q", _queuePanel.View.IsVisible));
+        if (_queue.Count > 0) items.Add(Item("\uE80A", "Gallery", ShowGallery, _kind == Kind.Model ? null : "G"));
         items.Add(Item("", "Add files to queue…", () => AddFilesDialog()));
         items.Add(Item("\uE8FD", "Play queue", TogglePlayQueue, "A", _playQueue));
 

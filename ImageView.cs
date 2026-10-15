@@ -345,7 +345,7 @@ class ImageView : Control, ICustomHitTest
         return d;
     }
 
-    static WriteableBitmap ToBitmap(byte[] bgra, int w, int h)
+    internal static WriteableBitmap ToBitmap(byte[] bgra, int w, int h)
     {
         var wb = new WriteableBitmap(new PixelSize(w, h), new Avalonia.Vector(96, 96), PixelFormat.Bgra8888, AlphaFormat.Unpremul);
         using var fb = wb.Lock();
