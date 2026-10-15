@@ -13,8 +13,9 @@ namespace EzView;
 
 enum CompareMode { Wipe, Flip, Difference }
 
-// The pixel under the pointer: its stored value (0–1 for 8-bit files, raw floats for deep ones) and its on-screen color.
-readonly record struct PixelInfo(int X, int Y, Vector4 Value, byte R, byte G, byte B, byte A, bool Deep);
+// The pixel under the pointer: its stored value (0–1 for 8-bit files, raw floats for deep ones), the same as 8-bit
+// (R G B A), and the color it has on screen right now, after exposure / gamma / channel view (Shown, BGRA).
+readonly record struct PixelInfo(int X, int Y, Vector4 Value, byte R, byte G, byte B, byte A, bool Deep, uint Shown);
 
 // Pixels for inspection, adjustments and comparison. Deep files (EXR, HDR, 16-bit) keep float RGBA as stored (linear for
 // EXR/HDR), so exposure can bring back highlights. Bgra is always the unadjusted 8-bit display image.
@@ -711,7 +712,8 @@ class ImageView : Control, ICustomHitTest
         int i = (y * s.W + x) * 4;
         byte b = s.Bgra[i], g = s.Bgra[i + 1], r = s.Bgra[i + 2], a = s.Bgra[i + 3];
         var value = s.Rgba is { } f ? new Vector4(f[i], f[i + 1], f[i + 2], f[i + 3]) : new Vector4(r, g, b, a) / 255f;
-        return new PixelInfo(x, y, value, r, g, b, a, s.Rgba != null);
+        var shown = BitConverter.ToUInt32(_shownBytes ?? s.Bgra, i);
+        return new PixelInfo(x, y, value, r, g, b, a, s.Rgba != null, shown);
     }
 
     void Inspect(Point p)
@@ -827,6 +829,8 @@ class ImageView : Control, ICustomHitTest
     }
 
     public bool Loupe = true;
+    // Width covered on the right by a side panel: the loupe flips to the left before it would slide under it.
+    public double CoveredRight { get => _loupe.CoveredRight; set => _loupe.CoveredRight = value; }
     readonly LoupeView _loupe = new() { IsHitTestVisible = false };
 
     // Magnifier next to the pointer: 11x11 source pixels, nearest-neighbour, grid and a marked center pixel.
@@ -837,6 +841,7 @@ class ImageView : Control, ICustomHitTest
         readonly WriteableBitmap _bmp = new(new PixelSize(N, N), new Avalonia.Vector(96, 96), PixelFormat.Bgra8888, AlphaFormat.Unpremul);
         Point _at;
         bool _shown;
+        public double CoveredRight;
 
         // patch: N × N BGRA pixels, row by row.
         public void Show(Point at, byte[] patch)
@@ -859,7 +864,7 @@ class ImageView : Control, ICustomHitTest
             if (!_shown) return;
             // Below-right of the pointer, flipped to stay inside the view.
             double x = _at.X + 24, y = _at.Y + 24;
-            if (x + Size > Bounds.Width) x = _at.X - 24 - Size;
+            if (x + Size > Bounds.Width - CoveredRight) x = _at.X - 24 - Size;
             if (y + Size > Bounds.Height) y = _at.Y - 24 - Size;
             var box = new Rect(x, y, Size, Size);
             var clip = new RoundedRect(box, 10);

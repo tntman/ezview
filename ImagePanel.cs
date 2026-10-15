@@ -92,6 +92,7 @@ class ImagePanel
         _unlock = unlock;
         body.Children.Add(new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Margin = new(20, 0, 20, 10), Children = { loupe, unlock } });
 
+        _rgba.TextWrapping = TextWrapping.Wrap; // HDR floats (R 12.375 …) are wider than the panel
         var lines = new StackPanel { Margin = new(14, 0, 0, 0), Spacing = 2, VerticalAlignment = VerticalAlignment.Center, Children = { _pos, _rgba, _hex } };
         _lockIcon.Margin = new(0, 0, 0, 0);
         _lockIcon.Foreground = Ui.Accent;
@@ -162,10 +163,11 @@ class ImagePanel
         bool has = _color != null;
         _pos.Text = has ? $"x {_color!.Value.X}   y {_color.Value.Y}" : "";
         _rgba.Text = !has ? ""
-            : _color!.Value.Deep ? string.Format(System.Globalization.CultureInfo.InvariantCulture, "R {0:0.000}   G {1:0.000}   B {2:0.000}   A {3:0.00}", _color.Value.Value.X, _color.Value.Value.Y, _color.Value.Value.Z, _color.Value.Value.W)
+            : _color!.Value.Deep ? string.Format(System.Globalization.CultureInfo.InvariantCulture, "R {0:0.000}  G {1:0.000}  B {2:0.000}  A {3:0.00}", _color.Value.Value.X, _color.Value.Value.Y, _color.Value.Value.Z, _color.Value.Value.W)
             : $"R {_color.Value.R}   G {_color.Value.G}   B {_color.Value.B}   A {_color.Value.A}";
         _hex.Text = has ? Format("HEX", _color!.Value) : "";
-        _swatch.Fill = has ? new SolidColorBrush(Color.FromArgb(_color!.Value.A, _color.Value.R, _color.Value.G, _color.Value.B)) : Brushes.Transparent;
+        // The swatch matches what's under the pointer (adjusted); the numbers stay the file's own values.
+        _swatch.Fill = has ? new SolidColorBrush(Color.FromUInt32(_color!.Value.Shown)) : Brushes.Transparent;
         _swatch.Stroke = _locked != null ? Ui.Accent : Ui.Edge;
         _lockIcon.IsVisible = _locked != null;
         SyncChips();

@@ -140,6 +140,8 @@ class MainWindow : Window
         // The blur under the bars follows the overlay's fade, frame by frame.
         _overlay.PropertyChanged += (_, e) => { if (e.Property == OpacityProperty) UpdateStrips(); };
         _bottom.SizeChanged += (_, _) => UpdateStrips();
+        _imagePanel.View.SizeChanged += (_, _) => UpdateStrips(); // resized by its grip: the loupe's no-go area follows
+        _info.View.SizeChanged += (_, _) => UpdateStrips();
 
         _hide.Tick += (_, _) => HideOverlay();
         _tick.Tick += (_, _) => OnTick();
@@ -512,6 +514,8 @@ class MainWindow : Window
         // Side panels stop above the player bar so their bottom row isn't hidden under it.
         _queuePanel.View.Margin = _outliner.View.Margin = _info.View.Margin = _imagePanel.View.Margin = new(Ui.Gap, top + Ui.Gap, Ui.Gap, bottom + Ui.Gap);
         _image.SetStrips(top, bottom, opacity);
+        var right = _imagePanel.View.IsVisible ? _imagePanel.View : _info.View.IsVisible ? _info.View : null;
+        _image.CoveredRight = right == null ? 0 : right.Width + Ui.Gap * 2;
         foreach (var blur in new[] { _video?.Blur, _model?.Blur })
             if (blur != null) (blur.Top, blur.Bottom, blur.Opacity) = (top, bottom, opacity);
         _video?.RequestNextFrameRendering();
@@ -639,6 +643,7 @@ class MainWindow : Window
         if (panel.IsVisible && panel == _imagePanel.View) { _info.View.IsVisible = false; _imagePanel.Sync(); }
         if (panel.IsVisible && panel == _info.View) _imagePanel.View.IsVisible = false;
         if (panel == _outliner.View) _outliner.Refresh();
+        UpdateStrips(); // the loupe needs to know what the right-hand panel now covers
         if (panel == _queuePanel.View) RefreshQueue();
         else RefreshInfo();
     }
