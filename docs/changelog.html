@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ezview changelog</title>
+<meta name="description" content="What changed in each ezview release.">
+<link rel="icon" href="ezview.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Nunito+Sans:opsz,wght@6..12,400;6..12,600;6..12,800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  :root { --bg: #0f0f0f; --surface: #141414; --edge: #ffffff1c; --text: #e6e6e6; --muted: #8a8a8a; --accent: #ff5b2e; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.6 "Nunito Sans", system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+  a { color: inherit; }
+  code { font: .86em "JetBrains Mono", ui-monospace, Consolas, monospace; }
+  .wrap { max-width: 820px; margin: 0 auto; padding: 0 16px; }
+  nav { position: sticky; top: 0; z-index: 5; backdrop-filter: blur(14px); background: #0c0c0ccc; border-bottom: 1px solid var(--edge); }
+  nav .wrap { max-width: 1080px; display: flex; align-items: center; gap: 24px; height: 56px; }
+  nav .brand { display: flex; align-items: center; gap: 10px; font-weight: 800; text-decoration: none; }
+  nav .brand img { width: 26px; height: 26px; }
+  nav .links { margin-left: auto; display: flex; gap: 22px; font-size: 14px; color: var(--muted); }
+  nav .links a { text-decoration: none; } nav .links a:hover { color: var(--text); }
+  header { padding: 64px 0 24px; }
+  h1 { font-size: clamp(36px, 6vw, 56px); line-height: 1.05; letter-spacing: -.03em; margin: 0 0 12px; }
+  h1 span { color: var(--accent); }
+  .sub { color: var(--muted); margin: 0; }
+  article { padding: 32px 0; border-top: 1px solid var(--edge); }
+  article header { padding: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; margin-bottom: 10px; }
+  h2 { font-size: 26px; letter-spacing: -.01em; margin: 0; }
+  .date { color: var(--muted); font-size: 14px; }
+  .tag { font-size: 12px; font-weight: 800; color: #140700; background: var(--accent); padding: 2px 8px; border-radius: 99px; }
+  .dl { margin-left: auto; font-size: 14px; color: var(--accent); text-decoration: none; font-weight: 700; }
+  .dl:hover { text-decoration: underline; }
+  .body { color: #c8c8c8; }
+  .body ul { padding-left: 20px; margin: 8px 0; }
+  .body li { margin: 4px 0; }
+  .body li::marker { color: var(--accent); }
+  .body p:last-child { color: var(--muted); font-size: 14px; }
+  footer { padding: 40px 0 60px; border-top: 1px solid var(--edge); color: var(--muted); font-size: 14px; }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <a class="brand" href="./"><img src="ezview.svg" alt="">ezview</a>
+    <div class="links">
+      <a href="./">Home</a>
+      <a href="formats.html">Formats</a>
+      <a href="https://github.com/tntman/ezview">GitHub</a>
+    </div>
+  </div>
+</nav>
+
+<header>
+  <div class="wrap">
+    <h1><span>Changelog</span></h1>
+    <p class="sub">What changed in each release, newest first.</p>
+  </div>
+</header>
+
+<main class="wrap" id="releases">
+  <article><p class="sub">Loading releases… or see them on <a href="https://github.com/tntman/ezview/releases">GitHub</a>.</p></article>
+</main>
+
+<footer>
+  <div class="wrap"><a href="./">← Back to ezview</a></div>
+</footer>
+
+<script>
+  // built from the GitHub releases, so a new release shows up here without editing this page
+  const list = document.getElementById("releases");
+  fetch("https://api.github.com/repos/tntman/ezview/releases", { headers: { Accept: "application/vnd.github.html+json" } })
+    .then(r => r.ok ? r.json() : Promise.reject())
+    .then(releases => {
+      list.innerHTML = "";
+      releases.filter(r => !r.draft).forEach((r, i) => {
+        const zip = r.assets.find(a => a.name.endsWith("-win-x64.zip"));
+        const date = new Date(r.published_at).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
+        const a = document.createElement("article");
+        a.innerHTML = `<header><h2></h2><span class="date"></span>${i === 0 ? '<span class="tag">Latest</span>' : ""}${zip ? '<a class="dl">Download zip</a>' : ""}</header><div class="body"></div>`;
+        a.querySelector("h2").textContent = r.name || r.tag_name;
+        a.querySelector(".date").textContent = date;
+        if (zip) a.querySelector(".dl").href = zip.browser_download_url;
+        a.querySelector(".body").innerHTML = r.body_html || ""; // rendered and sanitized by GitHub
+        list.append(a);
+      });
+    })
+    .catch(() => {});
+</script>
+</body>
+</html>
