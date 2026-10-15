@@ -71,7 +71,8 @@ class MainWindow : Window
         // The Border has the background, so it (not the DockPanel inside) receives the press.
         _top.PointerPressed += (_, e) => { if (e.ClickCount == 1 && e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) BeginMoveDrag(e); };
 
-        _bottom = new PlayBar(() => Player, Step, CycleLoop) { IsVisible = false };
+        _bottom = new PlayBar(() => Player, Step, CycleLoop, TogglePlayQueue) { IsVisible = false };
+        _bottom.SetPlayQueue(_playQueue);
         _bottom.SetLoop(_loop);
         _outliner = new OutlinerPanel(() => _kind == Kind.Model ? _model : null);
         _queuePanel = new QueuePanel(i => { _index = i; _ = ShowCurrent(); }, RemoveAt, () => AddFilesDialog());
@@ -203,8 +204,18 @@ class MainWindow : Window
     }
 
     // End of a video/audio item: play the next one, wrap only when looping the queue.
+    // Off by default: a file stops at its end. Repeat-queue implies playing through.
+    bool _playQueue;
+
+    void TogglePlayQueue()
+    {
+        _playQueue = !_playQueue;
+        _bottom.SetPlayQueue(_playQueue);
+    }
+
     void Advance()
     {
+        if (!_playQueue && _loop != LoopMode.Queue) return;
         if (_index < _queue.Count - 1) Step(1);
         else if (_loop == LoopMode.Queue) { _index = 0; _ = ShowCurrent(); }
     }
@@ -364,6 +375,7 @@ class MainWindow : Window
             case Key.G when _kind == Kind.Model: _model!.ToggleGrid(); break;
             case Key.T when _kind == Kind.Model: _model!.ToggleTextures(); break;
             case Key.R: CycleLoop(); break;
+            case Key.A when Player is VideoView: TogglePlayQueue(); break;
             case Key.Left or Key.PageUp: Step(-1); break;
             case Key.Right or Key.PageDown: Step(1); break;
             case Key.Q: TogglePanel(_queuePanel.View); break;
@@ -482,6 +494,7 @@ class MainWindow : Window
         }
         items.Add(Item("", "Show queue", () => TogglePanel(_queuePanel.View), "Q", _queuePanel.View.IsVisible));
         items.Add(Item("", "Add files to queue…", () => AddFilesDialog()));
+        items.Add(Item("\uE8FD", "Play queue", TogglePlayQueue, "A", _playQueue));
 
         Group(items);
         items.Add(Item("", "Info", () => TogglePanel(_info.View), "I", _info.View.IsVisible));

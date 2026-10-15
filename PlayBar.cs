@@ -32,12 +32,12 @@ class PlayBar : Border
     readonly TextBlock _sub = new() { Foreground = Ui.Muted, FontSize = 11, Margin = new(0, 2, 0, 0), TextTrimming = TextTrimming.CharacterEllipsis };
     readonly TextBlock _art = Ui.Icon("", 16);
     readonly TextBlock _time = new() { Foreground = Ui.Muted, FontSize = 11, VerticalAlignment = VerticalAlignment.Center, Margin = new(14, 0, 12, 0), MinWidth = 170 };
-    readonly Button _play, _mute, _loop;
+    readonly Button _play, _mute, _loop, _playQueue;
     readonly Track _progress, _volume;
     string _baseSub = "";
     bool _sequence;
 
-    public PlayBar(Func<IPlayback?> player, Action<int> step, Action cycleLoop)
+    public PlayBar(Func<IPlayback?> player, Action<int> step, Action cycleLoop, Action togglePlayQueue)
     {
         _player = player;
         Height = 72;
@@ -52,6 +52,7 @@ class PlayBar : Border
         _play.BorderBrush = Brush.Parse("#555");
         _play.BorderThickness = new(1.5);
         _mute = IconButton("", () => (_player() as VideoView)?.ToggleMute(), 32);
+        _playQueue = IconButton("\uE8FD", togglePlayQueue, 32);
         _loop = IconButton("", cycleLoop, 32);
         _progress = new Track(knob: false, (f, final) => _player()?.SeekFraction(f, final));
         _volume = new Track(knob: true, (f, _) => (_player() as VideoView)?.SetVolume(f * 100)) { Width = 96 };
@@ -73,7 +74,7 @@ class PlayBar : Border
             Children = { IconButton("", () => step(-1), 32), _play, IconButton("", () => step(1), 32) },
         };
 
-        var right = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, VerticalAlignment = VerticalAlignment.Center, Margin = new(0, 0, 20, 0), Children = { _loop, _mute, _volume } };
+        var right = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, VerticalAlignment = VerticalAlignment.Center, Margin = new(0, 0, 20, 0), Children = { _playQueue, _loop, _mute, _volume } };
 
         var grid = new Grid { ColumnDefinitions = new("Auto,Auto,*,Auto,Auto") };
         foreach (var (c, i) in new Control[] { info, controls, _progress, _time, right }.Select((c, i) => (c, i)))
@@ -107,7 +108,14 @@ class PlayBar : Border
     }
 
     // Loop, mute and volume only mean something for mpv media.
-    public void SetMediaControls(bool visible) => _loop.IsVisible = _mute.IsVisible = _volume.IsVisible = visible;
+    public void SetMediaControls(bool visible) => _playQueue.IsVisible = _loop.IsVisible = _mute.IsVisible = _volume.IsVisible = visible;
+
+    // Play queue: when a file ends, continue with the next one in the queue.
+    public void SetPlayQueue(bool on)
+    {
+        _playQueue.Foreground = on ? Ui.Accent : Ui.Muted;
+        ToolTip.SetTip(_playQueue, on ? "Play queue: on" : "Play queue: off");
+    }
 
     public void SetLoop(LoopMode mode)
     {
