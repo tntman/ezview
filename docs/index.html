@@ -48,7 +48,7 @@
   .hero-logo { width: 100%; max-width: 340px; justify-self: center; filter: drop-shadow(0 30px 60px #ff5b2e33); }
   .stack { margin-top: 28px; font-size: 13px; color: var(--muted); }
   .stack + .stack { margin-top: 6px; }
-  .stack b { color: var(--text); }
+  .stack b, .stack #version { color: var(--text); font-weight: 700; }
 
   section { padding: 72px 0; border-top: 1px solid var(--edge); }
   h2 { font-size: clamp(28px, 4vw, 38px); letter-spacing: -.02em; margin: 0 0 8px; }
@@ -129,10 +129,10 @@
       <p class="lede">A fast, minimal media viewer for Windows. <strong>Images, video, image sequences and 3D scenes</strong> in one clean, dark interface.</p>
       <p class="count"><b>119</b> file types out of the box · 46 image · 30 video &amp; audio · 43 3D · <a href="formats.html">Full list of formats →</a></p>
       <div class="cta">
-        <a class="btn primary" href="https://github.com/tntman/ezview/releases/latest/download/ezview-win-x64.zip">Download for Windows</a>
+        <a class="btn primary" id="download" href="https://github.com/tntman/ezview/releases/download/v0.1.1/ezview-0.1.1-win-x64.zip">Download v0.1.1 for Windows</a>
         <a class="btn" href="https://github.com/tntman/ezview">View on GitHub</a>
       </div>
-      <p class="stack">Windows 10/11 x64 · ~100 MB zip · unzip and run <code>ezview.exe</code>, no install needed</p>
+      <p class="stack"><a id="version" href="https://github.com/tntman/ezview/releases/tag/v0.1.1">v0.1.1</a> · Windows 10/11 x64 · ~100 MB zip · unzip and run <code>ezview.exe</code>, no install needed</p>
       <p class="stack">Windows may show a SmartScreen warning since the app isn't signed yet: click <b>More info</b> → <b>Run anyway</b>. It only asks the first time, and again after downloading a new version.</p>
       <p class="stack">C# / .NET 9 · Avalonia · libmpv · ImageMagick · Assimp · own Alembic, USD and Quake 3 readers</p>
     </div>
@@ -288,6 +288,15 @@ ezview --selftest</pre>
   <button type="button" aria-label="Close">×</button>
 </dialog>
 <script>
+  // point the download button at the newest release; the hard-coded link is the fallback
+  fetch("https://api.github.com/repos/tntman/ezview/releases/latest").then(r => r.json()).then(rel => {
+    const zip = rel.assets.find(a => a.name.endsWith("-win-x64.zip"));
+    if (!zip) return;
+    const v = rel.tag_name, dl = document.getElementById("download"), ver = document.getElementById("version");
+    dl.href = zip.browser_download_url; dl.textContent = `Download ${v} for Windows`;
+    ver.href = rel.html_url; ver.textContent = v;
+  }).catch(() => {});
+
   const box = document.getElementById("lightbox"), boxImg = box.querySelector("img"), boxCap = box.querySelector("p");
   document.querySelectorAll(".gallery a").forEach(a => a.addEventListener("click", e => {
     e.preventDefault();
