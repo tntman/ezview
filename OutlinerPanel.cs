@@ -23,9 +23,20 @@ class OutlinerPanel
         });
     }
 
+    Border? _selectedRow;
+
+    // Expands the tree down to the selection and scrolls it into view (after a pick in the viewport).
+    public void Reveal()
+    {
+        for (var p = _model()?.Selected?.Parent; p != null; p = p.Parent) p.Expanded = true;
+        Refresh();
+        if (_selectedRow is { } row) Avalonia.Threading.Dispatcher.UIThread.Post(() => row.BringIntoView(), Avalonia.Threading.DispatcherPriority.Background);
+    }
+
     // ponytail: rows are rebuilt on every toggle and not virtualized; fine for thousands of visible rows
     public void Refresh()
     {
+        _selectedRow = null;
         _rows.Children.Clear();
         var root = _model()?.Outline;
         if (root == null)
@@ -56,6 +67,7 @@ class OutlinerPanel
         var model = _model();
         bool shown = parentShown && n.Visible;
         bool solo = model?.Solo == n;
+        bool selected = model?.Selected == n;
 
         var chevron = Ui.Icon(n.Children.Count == 0 ? "" : n.Expanded ? "" : "", 9);
         chevron.Width = 16;
@@ -79,7 +91,7 @@ class OutlinerPanel
         var name = new TextBlock
         {
             Text = n.Name, FontSize = 13, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis,
-            Foreground = solo ? Ui.Accent : shown ? Ui.Text : Ui.Muted, Opacity = shown ? 1 : 0.6,
+            Foreground = solo || selected ? Ui.Accent : shown ? Ui.Text : Ui.Muted, Opacity = shown ? 1 : 0.6,
         };
         ToolTip.SetTip(name, n.Type.Length > 0 ? $"{n.Name}  ({n.Type})" : n.Name);
 
@@ -121,13 +133,29 @@ class OutlinerPanel
         }
         var row = new Border
         {
-            Height = 30, Background = Brushes.Transparent, Child = grid,
+            Height = 30, Background = selected ? Ui.AccentSoft : Brushes.Transparent, Child = grid,
             BorderBrush = solo ? Ui.Accent : Brushes.Transparent, BorderThickness = new(3, 0, 0, 0),
         };
         // Toggles fade in on hover (always visible while active), like the queue's remove button.
         row.PointerEntered += (_, _) => { row.Background = Ui.Hover; soloButton.Opacity = 1; eye.Opacity = 1; };
-        row.PointerExited += (_, _) => { row.Background = Brushes.Transparent; soloButton.Opacity = solo ? 1 : 0; eye.Opacity = n.Visible ? 0 : 1; };
-        row.DoubleTapped += (_, e) => { Toggle(false); e.Handled = true; };
+        row.PointerExited += (_, _) => { row.Background = selected ? Ui.AccentSoft : Brushes.Transparent; soloButton.Opacity = solo ? 1 : 0; eye.Opacity = n.Visible ? 0 : 1; };
+        // Click selects (click the selected row again to clear), double-click flies the camera to it.
+        row.PointerPressed += (_, e) =>
+        {
+            if (model == null || !e.GetCurrentPoint(row).Properties.IsLeftButtonPressed || e.ClickCount > 1) return;
+            model.Select(selected ? null : n);
+            Refresh();
+            e.Handled = true;
+        };
+        row.DoubleTapped += (_, e) =>
+        {
+            if (model == null) return;
+            model.Select(n);
+            model.FocusSelected();
+            Refresh();
+            e.Handled = true;
+        };
+        if (selected) _selectedRow = row;
         _rows.Children.Add(row);
 
         if (n.Expanded)

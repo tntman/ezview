@@ -4,6 +4,7 @@ using Avalonia.Input;
 using Avalonia.OpenGL;
 using Avalonia.OpenGL.Controls;
 using Avalonia.Rendering;
+using Avalonia.Threading;
 using Silk.NET.OpenGL;
 using Ai = Silk.NET.Assimp;
 using MagickImage = ImageMagick.MagickImage;
@@ -43,7 +44,7 @@ class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
         """;
     const string Fs = """
         in vec3 vp; in vec3 vn; in vec2 vt; in vec2 vlm;
-        uniform sampler2D tex; uniform sampler2D lm; uniform vec4 col; uniform vec3 eye; uniform int unlit; uniform int useLm;
+        uniform sampler2D tex; uniform sampler2D lm; uniform vec4 col; uniform vec3 eye; uniform int unlit; uniform int useLm; uniform int hl;
         out vec4 o;
         void main() {
             if (unlit == 1) { o = col; return; }  // wireframe lines and grid
@@ -55,11 +56,11 @@ class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
                 // over-bright texel down as a whole so it keeps its hue.
                 vec3 l = texture(lm, vlm).rgb * 4.0;
                 l /= max(1.0, max(l.r, max(l.g, l.b)));
-                o = vec4(c.rgb * l, 1.0);
-                return;
+                c.rgb *= l;
             }
-            float d = abs(dot(normalize(vn), normalize(eye - vp)));  // headlight, two-sided
-            o = vec4(c.rgb * (0.3 + 0.7 * d), 1.0);
+            else c.rgb *= 0.3 + 0.7 * abs(dot(normalize(vn), normalize(eye - vp)));  // headlight, two-sided
+            if (hl == 1) c.rgb = mix(c.rgb, vec3(1.0, 0.36, 0.18), 0.35);       // selected: accent tint
+            o = vec4(c.rgb, 1.0);
         }
         """;
 
@@ -132,6 +133,8 @@ class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
         }
         Solo = null;
         _visible = Enumerable.Repeat(true, parts.Count).ToArray();
+        _partNode = Outline.Descendants().Prepend(Outline).SelectMany(nd => nd.Meshes.Select(m => (m, nd))).GroupBy(x => x.m).ToDictionary(g => g.Key, g => g.Last().nd);
+        Select(null);
         _frame = _clockFrame = 0;
         _playing = IsAnimated;
         _clock.Restart();
@@ -295,6 +298,68 @@ class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
     }
 
     bool Shown(int part) => part >= _visible.Length || _visible[part];
+
+    // ---- Selection: one outliner node (with its subtree); picked in the viewport or chosen in the outliner.
+    public OutlineNode? Selected { get; private set; }
+    public event Action? SelectionChanged;
+    HashSet<int> _selParts = [];
+    Dictionary<int, OutlineNode> _partNode = [];
+    Point? _pickAt;
+    Point _pressAt;
+
+    public void Select(OutlineNode? n)
+    {
+        Selected = n;
+        _selParts = n == null ? [] : [.. n.Descendants().Prepend(n).SelectMany(x => x.Meshes)];
+        RequestNextFrameRendering();
+        SelectionChanged?.Invoke();
+    }
+
+    // F: fly the camera to the selection (or the whole scene when nothing is selected).
+    public void FocusSelected()
+    {
+        if (_parts == null) return;
+        Vector3 min = new(float.MaxValue), max = new(float.MinValue);
+        foreach (var i in _selParts.Count > 0 ? _selParts : Enumerable.Range(0, _parts.Count))
+            if (i < _parts.Count && PartBounds(_parts[i]) is var (lo, hi) && lo.X <= hi.X) { min = Vector3.Min(min, lo); max = Vector3.Max(max, hi); }
+        if (min.X > max.X) { FlyTo(_center, _radius * 3.2f); return; }
+        FlyTo((min + max) / 2, MathF.Max(Vector3.Distance(min, max) / 2, _radius * 0.002f) * 3.2f);
+    }
+
+    // World bounds of a part at the current frame, including every instance placement.
+    static (Vector3, Vector3) PartBounds(Part p)
+    {
+        Vector3 lo = new(float.MaxValue), hi = new(float.MinValue);
+        for (int i = 0; i < p.Verts.Length; i += 8)
+        {
+            var v = new Vector3(p.Verts[i], p.Verts[i + 1], p.Verts[i + 2]);
+            lo = Vector3.Min(lo, v);
+            hi = Vector3.Max(hi, v);
+        }
+        if (lo.X > hi.X || p.Inst.Length == 1 && p.Inst[0].IsIdentity) return (lo, hi);
+        Vector3 min = new(float.MaxValue), max = new(float.MinValue);
+        foreach (var m in p.Inst)
+            for (int c = 0; c < 8; c++)
+            {
+                var v = Vector3.Transform(new Vector3((c & 1) == 0 ? lo.X : hi.X, (c & 2) == 0 ? lo.Y : hi.Y, (c & 4) == 0 ? lo.Z : hi.Z), m);
+                min = Vector3.Min(min, v);
+                max = Vector3.Max(max, v);
+            }
+        return (min, max);
+    }
+
+    // Smooth camera flight (ease-out over 0.35 s), keeping the viewing angle.
+    (Vector3 Target, float Dist) _flyFrom, _flyTo;
+    bool _flying;
+    readonly System.Diagnostics.Stopwatch _flyClock = new();
+
+    void FlyTo(Vector3 target, float dist)
+    {
+        (_flyFrom, _flyTo) = ((_target, _dist), (target, dist));
+        _flyClock.Restart();
+        _flying = true;
+        RequestNextFrameRendering();
+    }
 
     // ---- Skeletons (FBX, glTF, MD5 …): the raw node tree + first animation, sampled per frame into AnimNodes.
     public bool ShowSkeleton { get; private set; } = true;
@@ -800,6 +865,15 @@ class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
             }
             if (_playing) RequestNextFrameRendering();
         }
+        if (_flying)
+        {
+            float t = (float)(_flyClock.Elapsed.TotalSeconds / 0.35);
+            if (t >= 1) { t = 1; _flying = false; }
+            float e = 1 - MathF.Pow(1 - t, 3);
+            _target = Vector3.Lerp(_flyFrom.Target, _flyTo.Target, e);
+            _dist = _flyFrom.Dist + (_flyTo.Dist - _flyFrom.Dist) * e;
+            if (_flying) RequestNextFrameRendering();
+        }
         var sc = VisualRoot?.RenderScaling ?? 1;
         int w = Math.Max(1, (int)(Bounds.Width * sc)), h = Math.Max(1, (int)(Bounds.Height * sc));
         gl.BindFramebuffer(FramebufferTarget.Framebuffer, (uint)fb);
@@ -824,7 +898,42 @@ class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
         var useLmLoc = gl.GetUniformLocation(_prog, "useLm");
         gl.Uniform1(gl.GetUniformLocation(_prog, "lm"), 1);
         gl.Uniform1(useLmLoc, 0);
+        var hlLoc = gl.GetUniformLocation(_prog, "hl");
+        gl.Uniform1(hlLoc, 0);
         gl.ActiveTexture(TextureUnit.Texture0);
+
+        if (_pickAt is { } pick)
+        {
+            // Picking: draw each visible part in a unique flat ID color into the clicked pixel only, then read it back.
+            _pickAt = null;
+            int px = Math.Clamp((int)(pick.X * sc), 0, w - 1), py = Math.Clamp(h - 1 - (int)(pick.Y * sc), 0, h - 1);
+            gl.Disable(EnableCap.Dither);
+            gl.Enable(EnableCap.ScissorTest);
+            gl.Scissor(px, py, 1, 1);
+            gl.ClearColor(0, 0, 0, 0);
+            gl.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
+            gl.Uniform1(unlitLoc, 1);
+            for (int i = 0; ShowGeometry && i < _gpu.Count; i++)
+            {
+                if (!Shown(i)) continue;
+                int id = i + 1;
+                gl.Uniform4(colLoc, (id & 255) / 255f, (id >> 8 & 255) / 255f, (id >> 16 & 255) / 255f, 1f);
+                gl.BindVertexArray(_gpu[i].Vao);
+                gl.DrawElementsInstanced(PrimitiveType.Triangles, (uint)_gpu[i].Part.Idx.Length, DrawElementsType.UnsignedInt, null, (uint)_gpu[i].Part.Inst.Length);
+            }
+            byte* rgba = stackalloc byte[4];
+            gl.ReadPixels(px, py, 1, 1, PixelFormat.Rgba, PixelType.UnsignedByte, rgba);
+            int hit = rgba[0] | rgba[1] << 8 | rgba[2] << 16;
+            gl.Disable(EnableCap.ScissorTest);
+            gl.Enable(EnableCap.Dither);
+            gl.ClearColor(0.055f, 0.055f, 0.055f, 1);
+            gl.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
+            var node = hit > 0 ? _partNode.GetValueOrDefault(hit - 1) : null;
+            // Clicking inside the current selection again climbs one level (vent -> fridge -> group).
+            if (node != null && Selected is { Parent: { } up } sel && up != Outline && (node == sel || sel.Descendants().Contains(node)))
+                node = up;
+            Dispatcher.UIThread.Post(() => Select(node));
+        }
 
         if (ShowGrid && (_gpu.Count > 0 || HasSkeleton))
         {
@@ -839,11 +948,12 @@ class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
         else if (Wireframe)
         {
             gl.Uniform1(unlitLoc, 1);
-            gl.Uniform4(colLoc, 0.78f, 0.78f, 0.78f, 1f);
             for (int i = 0; i < _gpu.Count; i++)
             {
                 var g = _gpu[i];
                 if (!Shown(i)) continue;
+                if (_selParts.Contains(i)) gl.Uniform4(colLoc, 1f, 0.36f, 0.18f, 1f);
+                else gl.Uniform4(colLoc, 0.78f, 0.78f, 0.78f, 1f);
                 if (g.LineVao == 0) BuildLines(gl, g);
                 gl.BindVertexArray(g.LineVao);
                 gl.DrawElementsInstanced(PrimitiveType.Lines, (uint)g.LineCount, DrawElementsType.UnsignedInt, null, (uint)g.Part.Inst.Length);
@@ -859,6 +969,7 @@ class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
                 // Textures off: plain white clay, so the shape reads without materials.
                 var c = Textures ? g.Part.Color : Vector4.One;
                 gl.Uniform1(useLmLoc, g.LmTex != 0 ? 1 : 0);
+                gl.Uniform1(hlLoc, _selParts.Contains(i) ? 1 : 0);
                 if (g.LmTex != 0) { gl.ActiveTexture(TextureUnit.Texture1); gl.BindTexture(TextureTarget.Texture2D, g.LmTex); gl.ActiveTexture(TextureUnit.Texture0); }
                 gl.BindTexture(TextureTarget.Texture2D, Textures && g.Tex != 0 ? g.Tex : _white);
                 gl.Uniform4(colLoc, c.X, c.Y, c.Z, c.W);
@@ -866,6 +977,7 @@ class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
                 gl.DrawElementsInstanced(PrimitiveType.Triangles, (uint)g.Part.Idx.Length, DrawElementsType.UnsignedInt, null, (uint)g.Part.Inst.Length);
             }
         }
+        gl.Uniform1(hlLoc, 0);
         DrawSkeleton(gl, colLoc, unlitLoc);
         gl.BindVertexArray(0);
         Blur.Apply(fb, w, h, sc);
@@ -877,13 +989,20 @@ class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
 
     protected override void OnPointerPressed(PointerPressedEventArgs e)
     {
-        _last = e.GetPosition(this);
+        _last = _pressAt = e.GetPosition(this);
         _dragging = e.ClickCount < 2;
         if (_dragging) e.Pointer.Capture(this);
     }
 
     protected override void OnPointerReleased(PointerReleasedEventArgs e)
     {
+        // A left click that didn't move is a pick (select what's under the pointer, or deselect on empty space).
+        var p = e.GetPosition(this);
+        if (_dragging && e.InitialPressMouseButton == MouseButton.Left && Math.Abs(p.X - _pressAt.X) + Math.Abs(p.Y - _pressAt.Y) < 4)
+        {
+            _pickAt = p;
+            RequestNextFrameRendering();
+        }
         _dragging = false;
         e.Pointer.Capture(null);
     }

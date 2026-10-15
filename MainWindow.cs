@@ -290,7 +290,11 @@ class MainWindow : Window
     void SetKind(Kind kind)
     {
         if (kind == Kind.Video && _video == null) _host.Children.Insert(0, _video = new VideoView());
-        if (kind == Kind.Model && _model == null) _host.Children.Insert(0, _model = new ModelView());
+        if (kind == Kind.Model && _model == null)
+        {
+            _host.Children.Insert(0, _model = new ModelView());
+            _model.SelectionChanged += () => { if (_outliner.View.IsVisible) _outliner.Reveal(); };
+        }
         _kind = kind;
         _image.IsVisible = kind == Kind.Image;
         if (_video != null) _video.IsVisible = kind == Kind.Video;
@@ -380,7 +384,9 @@ class MainWindow : Window
             case Key.Right or Key.PageDown: Step(1); break;
             case Key.Q: TogglePanel(_queuePanel.View); break;
             case Key.I: TogglePanel(_info.View); break;
-            case Key.F: ToggleFullscreen(); break;
+            case Key.F when _kind == Kind.Model: _model!.FocusSelected(); break;
+            case Key.F or Key.F11: ToggleFullscreen(); break;
+            case Key.Escape when _kind == Kind.Model && _model!.Selected != null: _model.Select(null); break;
             case Key.Escape: if (WindowState == WindowState.FullScreen) ToggleFullscreen(); else Close(); break;
             case Key.O when ctrl: OpenDialog(); break;
             case Key.D0 or Key.NumPad0: ResetView(); break;
@@ -477,6 +483,7 @@ class MainWindow : Window
         {
             Group(items);
             items.Add(Item("", "Reset view", ResetView, "D0"));
+            items.Add(Item("\uE71E", _model!.Selected != null ? "Frame selected" : "Frame all", _model.FocusSelected, "F"));
             items.Add(Item("\uE8FD", "Outliner", () => TogglePanel(_outliner.View), "O", _outliner.View.IsVisible));
             if (_model!.IsAnimated) items.Add(Item(_model.Paused ? "" : "", _model.Paused ? "Play" : "Pause", _model.TogglePause, "Space"));
             items.Add(Item("", "Wireframe", _model!.ToggleWireframe, "W", _model.Wireframe));
@@ -507,7 +514,7 @@ class MainWindow : Window
         }
 
         Group(items);
-        items.Add(Item("", "Fullscreen", ToggleFullscreen, "F", WindowState == WindowState.FullScreen));
+        items.Add(Item("", "Fullscreen", ToggleFullscreen, "F11", WindowState == WindowState.FullScreen));
         items.Add(Item("", "Close", Close, "Escape"));
 
         var menu = new ContextMenu { ItemsSource = items };

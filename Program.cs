@@ -65,6 +65,9 @@ static class Program
     {
         // English UI, so numbers and dates follow English formatting too ("6.1 MB", not "6,1 MB").
         System.Globalization.CultureInfo.DefaultThreadCurrentCulture = System.Globalization.CultureInfo.CurrentCulture = new("en-US");
+        // Unhandled errors end up in %TEMP%\ezview-crash.log, so a crash can be diagnosed afterwards.
+        AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+            File.AppendAllText(Path.Combine(Path.GetTempPath(), "ezview-crash.log"), $"{DateTime.Now:u}{Environment.NewLine}{e.ExceptionObject}{Environment.NewLine}{Environment.NewLine}");
         if (args is ["--selftest"]) { SelfTest.Run(); return; }
         if (args is ["--register"]) { Registration.Register(); Registration.OpenDefaultAppsSettings(); return; }
         if (args is ["--unregister"]) { Registration.Unregister(); return; }

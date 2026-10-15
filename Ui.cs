@@ -19,6 +19,7 @@ static class Ui
     public static readonly IBrush Text = Brush.Parse("#e6e6e6");
     public static readonly IBrush Muted = Brush.Parse("#7a7a7a");
     public static readonly IBrush Accent = Brush.Parse("#ff5b2e");
+    public static readonly IBrush AccentSoft = Brush.Parse("#33ff5b2e");
     public const string FontUri = "avares://ezview/Assets/Fonts#Nunito Sans";
     public static readonly FontFamily Font = new(FontUri);
     public static readonly FontFamily Icons = new("Segoe Fluent Icons, Segoe MDL2 Assets");
