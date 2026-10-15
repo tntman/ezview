@@ -81,6 +81,7 @@ class MainWindow : Window
 
         _overlay.Children.Add(_top);
         _overlay.Children.Add(_bottom);
+        _overlay.Children.Add(_zoomBar = ZoomBar());
         _host.Children.Add(_image);
         _host.Children.Add(_msg);
         Content = new Panel { Children = { _host, _queuePanel.View, _outliner.View, _info.View, _imagePanel.View, _overlay } };
@@ -133,6 +134,52 @@ class MainWindow : Window
 
         ShowMessage("Drop a file here or press Ctrl+O");
         Opened += (_, _) => { if (startFile != null) Open(startFile); };
+    }
+
+    // Image zoom pill at the bottom: − 100 % + | Fit | 1:1 (fades with the bars).
+    readonly Border _zoomBar;
+    readonly TextBlock _zoomText = new() { FontSize = 12, Foreground = Ui.Text, MinWidth = 48, TextAlignment = Avalonia.Media.TextAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+    Button _fitBtn = null!, _actualBtn = null!;
+
+    Border ZoomBar()
+    {
+        Button B(string text, string tip, Action click, bool icon = false)
+        {
+            var b = new Button
+            {
+                Content = text, FontFamily = icon ? Ui.Icons : FontFamily.Default, FontSize = icon ? 11 : 12, FontWeight = Avalonia.Media.FontWeight.SemiBold,
+                Height = 28, MinWidth = 32, Padding = new(10, 0), CornerRadius = new(14), Background = Brushes.Transparent, Foreground = Ui.Text,
+                BorderThickness = new(0), Focusable = false, HorizontalContentAlignment = HorizontalAlignment.Center, VerticalContentAlignment = VerticalAlignment.Center,
+            };
+            ToolTip.SetTip(b, tip);
+            b.Click += (_, _) => click();
+            return b;
+        }
+        _fitBtn = B("Fit", "Fit to window (0)", ResetView);
+        _actualBtn = B("1:1", "Actual size (H)", _image.OneToOne);
+        _image.ZoomChanged += SyncZoom;
+        return new Border
+        {
+            IsVisible = false, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Bottom, Margin = new(0, 0, 0, 16),
+            Background = Ui.Panel, BorderBrush = Ui.Edge, BorderThickness = new(1), CornerRadius = new(18), Padding = new(4),
+            Child = new StackPanel
+            {
+                Orientation = Orientation.Horizontal, Spacing = 2,
+                Children =
+                {
+                    B("", "Zoom out", () => _image.ZoomBy(1 / 1.25), icon: true), _zoomText, B("", "Zoom in", () => _image.ZoomBy(1.25), icon: true),
+                    new Border { Width = 1, Height = 16, Background = Ui.Edge, Margin = new(4, 0) },
+                    _fitBtn, _actualBtn,
+                },
+            },
+        };
+    }
+
+    void SyncZoom()
+    {
+        _zoomText.Text = $"{_image.Zoom * 100:0.#} %";
+        _fitBtn.Foreground = _image.IsFit ? Ui.Accent : Ui.Text;
+        _actualBtn.Foreground = Math.Abs(_image.Zoom - 1) < 1e-6 ? Ui.Accent : Ui.Text;
     }
 
     static Button Btn(string glyph, Action click)
@@ -302,6 +349,7 @@ class MainWindow : Window
         if (_video != null) _video.IsVisible = kind == Kind.Video;
         if (_model != null) _model.IsVisible = kind == Kind.Model;
         _bottom.IsVisible = kind == Kind.Video;
+        _zoomBar.IsVisible = kind == Kind.Image;
         _bottom.SetMediaControls(kind == Kind.Video);
         if (kind != Kind.Model) _outliner.View.IsVisible = false;
         if (kind != Kind.Image) _imagePanel.View.IsVisible = false;
@@ -395,7 +443,7 @@ class MainWindow : Window
             case Key.O when ctrl: OpenDialog(); break;
             case Key.C when ctrl && _kind == Kind.Image && _imagePanel.View.IsVisible: _imagePanel.CopyHex(); break;
             case Key.D0 or Key.NumPad0: ResetView(); break;
-            case Key.D1 or Key.NumPad1 when _kind == Kind.Image: _image.OneToOne(); break;
+            case Key.D1 or Key.NumPad1 or Key.H when _kind == Kind.Image: _image.OneToOne(); break;
             default: return;
         }
         e.Handled = true;
@@ -485,7 +533,7 @@ class MainWindow : Window
         {
             Group(items);
             items.Add(Item("", "Fit to window", ResetView, "D0"));
-            items.Add(Item("", "Actual size", _image.OneToOne, "D1"));
+            items.Add(Item("", "Actual size", _image.OneToOne, "H"));
             items.Add(Item("\uE790", "Adjust image\u2026", () => TogglePanel(_imagePanel.View), "E", _imagePanel.View.IsVisible || _image.Adjusted));
         }
         else if (_kind == Kind.Model)
@@ -678,7 +726,7 @@ class MainWindow : Window
 
     void HideOverlay()
     {
-        if (_queue.Count == 0 || _menuOpen || IsAudio || _top.IsPointerOver || _bottom.IsPointerOver) return;
+        if (_queue.Count == 0 || _menuOpen || IsAudio || _top.IsPointerOver || _bottom.IsPointerOver || _zoomBar.IsPointerOver) return;
         _hide.Stop();
         _overlay.Opacity = 0;
         _overlay.IsHitTestVisible = false;

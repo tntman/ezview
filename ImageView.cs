@@ -191,8 +191,16 @@ class ImageView : Control, ICustomHitTest
     public void Fit()
     {
         _fit = true;
+        ZoomChanged?.Invoke();
         Redraw();
     }
+
+    // Zoom as a fraction of actual size (1 = one image pixel per screen pixel), for the zoom bar.
+    public double Zoom => _zoom * Scale;
+    public bool IsFit => _fit;
+    public event Action? ZoomChanged;
+    double _reported;
+    public void ZoomBy(double factor) => ZoomAt(new Point(Bounds.Width / 2, Bounds.Height / 2), Math.Clamp(_zoom * factor, 0.01, 64));
 
     public void OneToOne() => ZoomAt(new Point(Bounds.Width / 2, Bounds.Height / 2), 1 / Scale);
 
@@ -218,6 +226,7 @@ class ImageView : Control, ICustomHitTest
             _x = (Bounds.Width - s.Width * _zoom) / 2;
             _y = (Bounds.Height - s.Height * _zoom) / 2;
         }
+        if (Zoom != _reported) { _reported = Zoom; Avalonia.Threading.Dispatcher.UIThread.Post(() => ZoomChanged?.Invoke()); }
         // Crisp pixels when zoomed far in, smooth otherwise.
         var mode = _zoom * Scale >= 3 ? BitmapInterpolationMode.None : BitmapInterpolationMode.HighQuality;
         using (ctx.PushRenderOptions(new RenderOptions { BitmapInterpolationMode = mode }))
