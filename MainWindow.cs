@@ -682,7 +682,7 @@ class MainWindow : Window
         _hide.Stop();
         _overlay.Opacity = 0;
         _overlay.IsHitTestVisible = false;
-        // Keep the cursor while it's over an open side panel.
-        if (!_queuePanel.View.IsPointerOver && !_outliner.View.IsPointerOver && !_info.View.IsPointerOver && !_imagePanel.View.IsPointerOver) Cursor = new Cursor(StandardCursorType.None);
+        // Keep the cursor while it's over an open side panel, and while inspecting an image.
+        if (!_imagePanel.View.IsVisible && !_queuePanel.View.IsPointerOver && !_outliner.View.IsPointerOver && !_info.View.IsPointerOver && !_imagePanel.View.IsPointerOver) Cursor = new Cursor(StandardCursorType.None);
     }
 }

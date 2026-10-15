@@ -84,7 +84,12 @@ class ImageView : Control, ICustomHitTest
     public double Exposure { get; private set; }  // stops
     public double Gamma { get; private set; } = 1;
     public bool Adjusted => Channel != 0 || Exposure != 0 || Gamma != 1;
-    public bool Inspecting;                                       // pixel readout wanted (panel open)
+    bool _inspecting;
+    public bool Inspecting                                        // pixel readout wanted (panel open)
+    {
+        get => _inspecting;
+        set { _inspecting = value; if (!value) _loupe.Hide(); }
+    }
     public event Action<int, int, byte, byte, byte, byte>? PixelHovered; // x, y, r, g, b, a
     public event Action? PixelLeft;
 
