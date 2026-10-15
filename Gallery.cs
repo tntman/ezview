@@ -151,7 +151,9 @@ class Gallery
     // (including the view transform for EXR/HDR, so thumbnails match the viewer).
     static Bitmap? Thumb(string path)
     {
-        if (Media.KindOf(path) is not (Kind.Image or Kind.None)) return ShellThumbnail.Get(path, ThumbSize); // video, gif, 3D: Explorer's thumbnail
+        if (Media.KindOf(path) == Kind.Model)
+            return ModelView.Thumbnail(path, ThumbSize, ThumbSize * 3 / 4) is { } px ? ImageView.ToBitmap(px, ThumbSize, ThumbSize * 3 / 4) : null;
+        if (Media.KindOf(path) is not (Kind.Image or Kind.None)) return ShellThumbnail.Get(path, ThumbSize); // video, gif: Explorer's thumbnail
         var ext = Path.GetExtension(path).ToLowerInvariant();
         if (ext is ".jpg" or ".jpeg" or ".png" or ".webp" or ".bmp")
         {

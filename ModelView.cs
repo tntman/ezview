@@ -12,7 +12,7 @@ using MagickFormat = ImageMagick.MagickFormat;
 
 namespace EzView;
 
-class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
+partial class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
 {
     // 8 floats per vertex: position, normal, uv.
     // Inst: placement matrices drawn with GPU instancing (one identity for ordinary meshes).
