@@ -72,12 +72,21 @@
   .two { display: grid; grid-template-columns: 1fr 1fr; gap: 48px; }
   .two p { color: #c8c8c8; }
 
+  .gallery { display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; }
+  .gallery figure { margin: 0; }
+  .gallery figure:first-child { grid-column: 1 / -1; }
+  .gallery a { display: block; border-radius: 12px; overflow: hidden; border: 1px solid var(--edge); box-shadow: 0 20px 50px #0008; transition: transform .2s, border-color .2s; }
+  .gallery a:hover { transform: translateY(-2px); border-color: #ff5b2e66; }
+  .gallery img { display: block; width: 100%; height: auto; }
+  .gallery figcaption { margin-top: 10px; font-size: 14px; color: var(--muted); }
+  .gallery figcaption b { color: var(--text); font-weight: 600; }
+
   footer { padding: 40px 0 60px; border-top: 1px solid var(--edge); color: var(--muted); font-size: 14px; }
   footer .wrap { display: flex; flex-wrap: wrap; gap: 12px; justify-content: space-between; }
 
   @media (max-width: 760px) {
     header { padding: 56px 0 48px; }
-    header .wrap, .two, .keys-grid { grid-template-columns: 1fr; gap: 32px; }
+    header .wrap, .two, .keys-grid, .gallery { grid-template-columns: 1fr; gap: 32px; }
     .hero-logo { max-width: 200px; order: -1; justify-self: start; }
     nav .links a:not(.gh) { display: none; }
     td:first-child { white-space: normal; }
@@ -90,6 +99,7 @@
   <div class="wrap">
     <a class="brand" href="#"><img src="ezview.svg" alt="">ezview</a>
     <div class="links">
+      <a href="#shots">Screenshots</a>
       <a href="#formats">Formats</a>
       <a href="#features">Features</a>
       <a href="#keys">Keys</a>
@@ -113,6 +123,22 @@
     <img class="hero-logo" src="ezview.svg" alt="ezview logo">
   </div>
 </header>
+
+<section id="shots">
+  <div class="wrap">
+    <h2>See it</h2>
+    <p class="sub">The same window for every kind of file.</p>
+    <div class="gallery">
+      <figure><a href="shots/usd-outliner.jpg"><img src="shots/usd-outliner.jpg" width="1440" height="900" alt="Pixar Kitchen Set USD scene with the outliner open"></a><figcaption><b>USD</b> · Pixar's Kitchen Set with the outliner</figcaption></figure>
+      <figure><a href="shots/exr-inspect.jpg"><img src="shots/exr-inspect.jpg" width="1440" height="900" alt="EXR image with the inspection panel and pixel loupe" loading="lazy"></a><figcaption><b>EXR</b> · channels, exposure, gamma and pixel readout</figcaption></figure>
+      <figure><a href="shots/photo-info.jpg"><img src="shots/photo-info.jpg" width="1440" height="900" alt="JPEG photo with the info panel showing metadata and EXIF" loading="lazy"></a><figcaption><b>JPEG</b> · info panel with metadata and EXIF</figcaption></figure>
+      <figure><a href="shots/video.jpg"><img src="shots/video.jpg" width="1440" height="900" alt="AV1 video playing with the player bar" loading="lazy"></a><figcaption><b>AV1 / MKV</b> · player bar with frame counter</figcaption></figure>
+      <figure><a href="shots/sequence.jpg"><img src="shots/sequence.jpg" width="1440" height="900" alt="EXR image sequence playing as a clip with frame numbers" loading="lazy"></a><figcaption><b>Image sequence</b> · shot.[1001–1048].exr as one clip</figcaption></figure>
+      <figure><a href="shots/helmet.jpg"><img src="shots/helmet.jpg" width="1440" height="900" alt="Textured glTF damaged helmet model" loading="lazy"></a><figcaption><b>glTF</b> · textured model</figcaption></figure>
+      <figure><a href="shots/fbx-wire.jpg"><img src="shots/fbx-wire.jpg" width="1440" height="900" alt="FBX spider model in wireframe" loading="lazy"></a><figcaption><b>FBX</b> · wireframe (W)</figcaption></figure>
+    </div>
+  </div>
+</section>
 
 <section id="formats">
   <div class="wrap">
@@ -233,7 +259,7 @@ ezview --selftest</pre>
 
 <footer>
   <div class="wrap">
-    <span>ezview · built on libmpv, ImageMagick and Assimp</span>
+    <span>ezview · built on libmpv, ImageMagick and Assimp<br>Screenshots: Kitchen Set © Pixar · Damaged Helmet by theblueturtle_ (CC BY 4.0)</span>
     <a href="https://github.com/tntman/ezview">github.com/tntman/ezview</a>
   </div>
 </footer>
