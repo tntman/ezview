@@ -871,13 +871,28 @@ class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
         Blur.Apply(fb, w, h, sc);
     }
 
+    // Only a single press starts camera navigation: the second press of a double-click toggles fullscreen,
+    // and the window resizing under it would otherwise read as a huge drag (camera flipping to look straight down).
+    bool _dragging;
+
     protected override void OnPointerPressed(PointerPressedEventArgs e)
     {
         _last = e.GetPosition(this);
-        e.Pointer.Capture(this);
+        _dragging = e.ClickCount < 2;
+        if (_dragging) e.Pointer.Capture(this);
     }
 
-    protected override void OnPointerReleased(PointerReleasedEventArgs e) => e.Pointer.Capture(null);
+    protected override void OnPointerReleased(PointerReleasedEventArgs e)
+    {
+        _dragging = false;
+        e.Pointer.Capture(null);
+    }
+
+    protected override void OnSizeChanged(Avalonia.Controls.SizeChangedEventArgs e)
+    {
+        base.OnSizeChanged(e);
+        _dragging = false;
+    }
 
     // Set when the view is dragged, so a Space press used for Houdini-style navigation doesn't also toggle playback.
     public bool Navigated;
@@ -905,6 +920,7 @@ class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
         var pt = e.GetCurrentPoint(this);
         float dx = (float)(pt.Position.X - _last.X), dy = (float)(pt.Position.Y - _last.Y);
         _last = pt.Position;
+        if (!_dragging) return;
         if (pt.Properties.IsLeftButtonPressed)
         {
             _yaw -= dx * 0.01f;

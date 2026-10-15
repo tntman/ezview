@@ -108,6 +108,7 @@ class MainWindow : Window
         AddHandler(DoubleTappedEvent, (_, e) =>
         {
             if (e.Source is Visual v && (v.FindAncestorOfType<Button>(true) != null || _bottom.IsPointerOver || _queuePanel.View.IsPointerOver || _outliner.View.IsPointerOver || _info.View.IsPointerOver)) return;
+            _video?.CancelClick(); // a double-click means fullscreen, never play/pause
             ToggleFullscreen();
         }, Avalonia.Interactivity.RoutingStrategies.Bubble, true);
         DragDrop.SetAllowDrop(this, true);

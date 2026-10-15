@@ -214,9 +214,26 @@ unsafe class VideoView : OpenGlControlBase, ICustomHitTest, IPlayback
     public void ToggleMute() => Command("cycle", "mute");
     public void SetVolume(double percent) => Command("set", "volume", Num(Math.Round(percent)));
 
-    // Double-click fires two presses, so pause state is unchanged and the window goes fullscreen.
+    // A click toggles pause only once it's clearly not the start of a double-click (which means fullscreen),
+    // so double-clicking never flickers playback off and on.
+    readonly DispatcherTimer _clickTimer = new() { Interval = TimeSpan.FromMilliseconds(250) };
+
     protected override void OnPointerPressed(PointerPressedEventArgs e)
     {
-        if (e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) TogglePause();
+        if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) return;
+        _clickTimer.Stop();
+        if (e.ClickCount >= 2) return;
+        _clickTimer.Tick -= OnSingleClick;
+        _clickTimer.Tick += OnSingleClick;
+        _clickTimer.Start();
+    }
+
+    // Called by the window when it sees the double-click, in case this view didn't get the second press.
+    public void CancelClick() => _clickTimer.Stop();
+
+    void OnSingleClick(object? sender, EventArgs e)
+    {
+        _clickTimer.Stop();
+        TogglePause();
     }
 }
