@@ -247,7 +247,13 @@ class ImageView : Control, ICustomHitTest
     {
         _drag = null; // a double-click resizing the window must not turn into a pan
         // Keep the same point in the middle of the view (a centered 1:1 image stays centered in fullscreen).
-        if (!_fit && e.PreviousSize.Width > 0)
+        if (!_fit && Math.Abs(Zoom - 1) < 1e-6 && _bmp != null)
+        {
+            // 1:1 mode: re-center, even after panning.
+            _x = (e.NewSize.Width - _bmp.PixelSize.Width * _zoom) / 2;
+            _y = (e.NewSize.Height - _bmp.PixelSize.Height * _zoom) / 2;
+        }
+        else if (!_fit && e.PreviousSize.Width > 0)
         {
             _x += (e.NewSize.Width - e.PreviousSize.Width) / 2;
             _y += (e.NewSize.Height - e.PreviousSize.Height) / 2;
