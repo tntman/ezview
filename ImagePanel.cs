@@ -121,6 +121,7 @@ class ImagePanel
         _image.PixelLeft += () => { if (_locked == null) Show(null); };
         // Click on the image locks that pixel; clicking again unlocks (and shows the pixel under the pointer).
         _image.PixelClicked += p => Lock(_locked == null ? p : null);
+        _image.ImageChanged += () => Lock(null); // a locked pick belongs to the picture it was taken from
         Show(null);
 
         View = Ui.SidePanel(left: false, new ScrollViewer { Content = body });

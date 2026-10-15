@@ -9,8 +9,9 @@ namespace EzView;
 // Minimal USD reader for viewing: .usda (text), .usdc (Crate binary), .usdz (zip).
 // Both parsers produce the same flat spec table (path -> fields); one converter turns it into an AnimScene.
 // Supports Xform ops (animated), Mesh points (point caches), material diffuse color, upAxis,
-// references / payloads / sublayers (composed by grafting the referenced prim tree), PointInstancer.
-// ponytail: no variants, layer offsets, inherits/specializes or skinning (UsdSkel meshes show their rest pose)
+// references / payloads / sublayers (composed by grafting the referenced prim tree), variants (the selected or first),
+// PointInstancer and UsdSkel skinning.
+// ponytail: no layer offsets, inherits/specializes or blend shapes
 static class Usd
 {
     public sealed class Spec

@@ -21,6 +21,10 @@ class Gallery
     readonly Dictionary<string, Bitmap?> _thumbs = new(StringComparer.OrdinalIgnoreCase);
     readonly Action<int> _open;
     int _generation;
+    string? _folder;
+    public DateTime ClosedAt { get; private set; }
+    // 3D thumbnails load whole models one at a time; they get their own lane so images never wait behind them.
+    static readonly SemaphoreSlim ModelLane = new(1);
     const int ThumbSize = 320;
 
     public Gallery(Window window, Action<int> open)
@@ -49,7 +53,10 @@ class Gallery
     public void Show(List<Entry> queue, int current)
     {
         var gen = ++_generation;
-        var folder = queue.Count > 0 ? Path.GetFileName(Path.GetDirectoryName(queue[0].Path)) : "";
+        var dir = queue.Count > 0 ? Path.GetDirectoryName(queue[0].Path) : null;
+        // Thumbnails are kept while browsing one folder; a new folder starts a fresh cache.
+        if (!string.Equals(dir, _folder, StringComparison.OrdinalIgnoreCase)) { _thumbs.Clear(); _folder = dir; }
+        var folder = Path.GetFileName(dir);
         _title.Text = string.IsNullOrEmpty(folder) ? "Gallery" : folder;
         _count.Text = $"{queue.Count} {(queue.Count == 1 ? "file" : "files")}";
         _tiles.Children.Clear();
@@ -75,7 +82,8 @@ class Gallery
         foreach (var (target, glyph, entry) in pending)
             _ = Task.Run(async () =>
             {
-                await gate.WaitAsync();
+                var lane = Media.KindOf(ThumbPath(entry)) == Kind.Model ? ModelLane : gate;
+                await lane.WaitAsync();
                 try
                 {
                     if (gen != _generation) return;
@@ -88,12 +96,13 @@ class Gallery
                         if (gen == _generation) SetThumb(target, glyph, thumb);
                     });
                 }
-                finally { gate.Release(); }
+                finally { lane.Release(); }
             });
     }
 
     public void Hide()
     {
+        if (View.IsVisible) ClosedAt = DateTime.Now;
         _generation++;
         View.IsVisible = false;
     }

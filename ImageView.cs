@@ -75,26 +75,38 @@ class ImageView : Control, ICustomHitTest
     }
 
     // Neighbours in the queue are decoded ahead, so stepping through a folder shows the next image at once.
-    readonly Dictionary<string, Task<(Bitmap, Source?)>> _ahead = new(StringComparer.OrdinalIgnoreCase);
+    // A null result: too big to decode ahead (it would sit in memory next to the current image).
+    readonly Dictionary<string, Task<(Bitmap, Source?)?>> _ahead = new(StringComparer.OrdinalIgnoreCase);
 
     public void Prefetch(IEnumerable<string> paths)
     {
-        // ponytail: files over 64 MB are skipped, they'd hold hundreds of MB decoded; a size-aware budget if that matters
-        var want = paths.Where(p => !string.Equals(p, _path, StringComparison.OrdinalIgnoreCase) && new FileInfo(p).Length < 64 << 20)
+        var want = paths.Where(p => !string.Equals(p, _path, StringComparison.OrdinalIgnoreCase) && new FileInfo(p) is { Exists: true, Length: < 64 << 20 })
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         foreach (var (p, t) in _ahead.Where(kv => !want.Contains(kv.Key)).ToList())
         {
             _ahead.Remove(p);
-            _ = t.ContinueWith(x => { if (x.IsCompletedSuccessfully) x.Result.Item1.Dispose(); });
+            _ = t.ContinueWith(x => { if (x.IsCompletedSuccessfully) x.Result?.Item1.Dispose(); });
         }
         foreach (var p in want)
-            if (!_ahead.ContainsKey(p)) _ahead[p] = Task.Run(() => Decode(p));
+            if (!_ahead.ContainsKey(p)) _ahead[p] = Task.Run(() => Pixels(p) > 40_000_000 ? null : ((Bitmap, Source?)?)Decode(p));
+    }
+
+    // Width × height from the header; huge when unreadable, so nothing is decoded ahead for it.
+    static long Pixels(string path)
+    {
+        try
+        {
+            using var info = new MagickImage();
+            info.Ping(path);
+            return (long)info.Width * info.Height;
+        }
+        catch (MagickException) { return long.MaxValue; }
     }
 
     public async Task Load(string path)
     {
         var id = ++_loadId;
-        var full = _ahead.Remove(path, out var ready) ? ready : Task.Run(() => Decode(path));
+        var full = _ahead.Remove(path, out var ready) ? Ahead(ready, path) : Task.Run(() => Decode(path));
         // Big photos: a quick screen-sized decode first, swapped for the full image when it's ready.
         double previewWidth = 0;
         if (!full.IsCompleted && await Task.Run(() => Preview(path)) is { } preview)
@@ -103,6 +115,7 @@ class ImageView : Control, ICustomHitTest
             else
             {
                 Show(preview, path, null);
+                _isPreview = true;
                 previewWidth = preview.PixelSize.Width;
                 Fit();
             }
@@ -115,14 +128,21 @@ class ImageView : Control, ICustomHitTest
         Source? b = null;
         if (_bPath != null && _bPath != path)
         {
+            // B is resampled to A's size; the last one is kept, so stepping through same-size renders reuses it.
             var (bp, size) = (_bPath, bmp.PixelSize);
-            try { b = await Task.Run(() => ReadFile(bp, size.Width, size.Height)); } catch { }
+            if (_bCache is { } c && c.Path == bp && c.Src.W == size.Width && c.Src.H == size.Height) b = c.Src;
+            else
+            {
+                try { b = await Task.Run(() => ReadFile(bp, size.Width, size.Height)); } catch (MagickException) { }
+                if (b != null) _bCache = (bp, b);
+            }
             if (id != _loadId) { bmp.Dispose(); return; }
         }
         bool zoomedPreview = previewWidth > 0 && !_fit;
         if (zoomedPreview) _zoom *= previewWidth / bmp.PixelSize.Width; // same view, now in full-size pixels
         Show(bmp, path, src);
         _b = b;
+        ImageChanged?.Invoke();
         // Settings carry over, so images can be compared the same way.
         if (Adjusted || Inspecting || CompareActive) _ = Rebuild();
         else DropCompare();
@@ -131,6 +151,9 @@ class ImageView : Control, ICustomHitTest
         else Fit();
     }
 
+    static async Task<(Bitmap, Source?)> Ahead(Task<(Bitmap, Source?)?> ahead, string path) =>
+        await ahead ?? await Task.Run(() => Decode(path));
+
     void Show(Bitmap bmp, string path, Source? src)
     {
         if (_path != path) (_rot, _flip) = (0, false);
@@ -138,23 +161,32 @@ class ImageView : Control, ICustomHitTest
         _bmp = bmp;
         _path = path;
         _src = src;
+        _srcTask = null;
+        _isPreview = false;
+        _adjustId++; // adjustments still running were for the previous picture
         _shown?.Dispose();
         _shown = null;
         _shownBytes = null;
     }
 
-    // Screen-sized decode of a large Skia-readable file (null when not worth it or EXIF-rotated).
+    bool _isPreview; // _bmp is the quick screen-sized decode; pixel work waits for the full image
+
+    // Screen-sized decode of a large Skia-readable file (null when not worth it, EXIF-rotated or unreadable).
     static Bitmap? Preview(string path)
     {
         var ext = Path.GetExtension(path).ToLowerInvariant();
         if (!Fast.Contains(ext) || new FileInfo(path).Length < 1 << 20) return null;
-        using (var info = new MagickImage())
+        try
         {
-            info.Ping(path); // header only
-            if (info.Width * info.Height < 16_000_000 || info.Orientation is not (OrientationType.TopLeft or OrientationType.Undefined)) return null;
+            using (var info = new MagickImage())
+            {
+                info.Ping(path); // header only
+                if (info.Width * info.Height < 16_000_000 || info.Orientation is not (OrientationType.TopLeft or OrientationType.Undefined)) return null;
+            }
+            using var stream = File.OpenRead(path);
+            return Bitmap.DecodeToWidth(stream, 2560, BitmapInterpolationMode.MediumQuality);
         }
-        using var stream = File.OpenRead(path);
-        return Bitmap.DecodeToWidth(stream, 2560, BitmapInterpolationMode.MediumQuality);
+        catch (Exception ex) when (ex is MagickException or IOException) { return null; } // the full decode reports the error
     }
 
     // ---- Inspection: channel view, exposure and gamma, histogram and a pixel readout.
@@ -175,7 +207,7 @@ class ImageView : Control, ICustomHitTest
         }
     }
     public event Action<PixelInfo>? PixelHovered, PixelClicked;
-    public event Action? PixelLeft;
+    public event Action? PixelLeft, ImageChanged;
     public event Action<int[]>? HistogramChanged; // 3 × 256 bins (R, G, B) of what is shown
 
     string? _path;
@@ -196,21 +228,80 @@ class ImageView : Control, ICustomHitTest
         _ = Rebuild();
     }
 
+    Task<Source>? _srcTask;
+    (string Path, Source Src)? _bCache;
+
+    // Pixels for inspection and adjustments. 8-bit pictures copy them out of the bitmap already on screen (fast, no
+    // second decode); only 16-bit PNGs, which the screen bitmap holds as 8-bit, are read again. One read per picture,
+    // however many mouse moves or slider changes ask for it.
     async Task<bool> EnsureSource()
     {
         if (_src != null) return true;
-        if (_path is not { } path) return false;
+        if (_path is not { } path || _bmp is not { } bmp || _isPreview) return false;
+        if (!IsDeepPng(path))
+        {
+            _src = FromBitmap(bmp); // on the UI thread: the bitmap can't be replaced (disposed) halfway through
+            return true;
+        }
         var id = _loadId;
-        var src = await Task.Run(() => ReadFile(path, null, null));
-        if (id != _loadId) return false;
-        _src = src;
-        return true;
+        var task = _srcTask ??= Task.Run(() => ReadFile(path, null, null));
+        try
+        {
+            var src = await task;
+            if (id != _loadId) return false;
+            _src ??= src;
+            return true;
+        }
+        catch (MagickException) { return false; } // kept as failed: no retry on every mouse move
     }
 
-    // Applies the adjustments, then refreshes the histogram (panel open) and the compare image.
+    static bool IsDeepPng(string path)
+    {
+        if (!path.EndsWith(".png", StringComparison.OrdinalIgnoreCase)) return false;
+        try
+        {
+            using var f = File.OpenRead(path);
+            Span<byte> head = stackalloc byte[25];
+            return f.Read(head) == 25 && head[24] == 16; // IHDR bit depth
+        }
+        catch (IOException) { return false; }
+    }
+
+    static Source FromBitmap(Bitmap bmp)
+    {
+        var size = bmp.PixelSize;
+        var bytes = new byte[size.Width * size.Height * 4];
+        using var wb = new WriteableBitmap(size, new Avalonia.Vector(96, 96), PixelFormat.Bgra8888, AlphaFormat.Unpremul);
+        using (var fb = wb.Lock())
+        {
+            bmp.CopyPixels(fb, AlphaFormat.Unpremul);
+            for (int y = 0; y < size.Height; y++) Marshal.Copy(fb.Address + y * fb.RowBytes, bytes, y * size.Width * 4, size.Width * 4);
+        }
+        return new Source(bytes, null, false, size.Width, size.Height);
+    }
+
+    // Applies the adjustments, then refreshes the histogram (panel open) and the compare image. One pass runs at a
+    // time: slider drags coalesce into "the latest settings" instead of piling up full-size passes (and their memory).
+    bool _rebuilding, _rebuildAgain;
+
     async Task Rebuild()
     {
-        var id = ++_adjustId;
+        _adjustId++; // a pass already running is now stale
+        if (_rebuilding) { _rebuildAgain = true; return; }
+        _rebuilding = true;
+        try
+        {
+            do
+            {
+                _rebuildAgain = false;
+                await RebuildOnce(_adjustId);
+            } while (_rebuildAgain);
+        }
+        finally { _rebuilding = false; }
+    }
+
+    async Task RebuildOnce(int id)
+    {
         var (ch, ex, ga, raw) = (Channel, Exposure, Gamma, Raw);
         byte[]? bytes = null;
         if (Adjusted)
@@ -369,7 +460,7 @@ class ImageView : Control, ICustomHitTest
         }
         // ponytail: whole image decoded into memory, add tiling when gigapixel images matter
         var src = ReadFile(path, null, null);
-        return (ToBitmap(src.Bgra, src.W, src.H), src);
+        return (ToBitmap(src.Bgra, src.W, src.H), src.Rgba != null ? src : null); // 8-bit: the bitmap holds it all
     }
 
     // Decode with ImageMagick (EXIF orientation applied), optionally resampled to a size (the compare image).
@@ -572,6 +663,7 @@ class ImageView : Control, ICustomHitTest
 
     Point _pressAt;
     bool _wipeDrag;
+    static Cursor? _sizeWE;
 
     bool NearWipe(Point p) => CompareActive && CompareMode == CompareMode.Wipe && Math.Abs(p.X - WipeX) < 12;
 
@@ -588,7 +680,7 @@ class ImageView : Control, ICustomHitTest
     protected override void OnPointerMoved(PointerEventArgs e)
     {
         var p = e.GetPosition(this);
-        Cursor = _wipeDrag || NearWipe(p) ? new Cursor(StandardCursorType.SizeWestEast) : null;
+        Cursor = _wipeDrag || NearWipe(p) ? (_sizeWE ??= new Cursor(StandardCursorType.SizeWestEast)) : null;
         if (_wipeDrag)
         {
             _wipe = Math.Clamp(p.X / Math.Max(1, Bounds.Width), 0, 1);
@@ -609,7 +701,7 @@ class ImageView : Control, ICustomHitTest
     {
         if (_src == null || _bmp == null || !ImageToView().TryInvert(out var inv)) return null;
         var q = p.Transform(inv);
-        int x = (int)Math.Floor(q.X), y = (int)Math.Floor(q.Y);
+        int x = (int)Math.Floor(q.X * _src.W / _bmp.PixelSize.Width), y = (int)Math.Floor(q.Y * _src.H / _bmp.PixelSize.Height);
         return x < 0 || y < 0 || x >= _src.W || y >= _src.H ? null : (x, y);
     }
 
@@ -628,8 +720,30 @@ class ImageView : Control, ICustomHitTest
         if (_src == null) { _ = EnsureSource(); return; }
         if (PixelAt(p) is not var (x, y)) { PixelLeft?.Invoke(); _loupe.Hide(); return; }
         PixelHovered?.Invoke(Pixel(x, y));
-        if (Loupe) _loupe.Show(p, x, y, _src.Bgra, _src.W, _src.H);
+        if (Loupe) _loupe.Show(p, LoupePatch(x, y));
         else _loupe.Hide();
+    }
+
+    // The pixels around (x, y) as shown: adjusted values, laid out the way the view is rotated / flipped.
+    byte[] LoupePatch(int x, int y)
+    {
+        const int N = LoupeView.N;
+        var s = _src!;
+        var shown = _shownBytes ?? s.Bgra;
+        var patch = new byte[N * N * 4];
+        for (int vy = 0; vy < N; vy++)
+            for (int vx = 0; vx < N; vx++)
+            {
+                // A step in the view, turned back into a step in the image: undo the rotation, then the flip.
+                int dx = vx - N / 2, dy = vy - N / 2;
+                for (int k = 0; k < _rot; k++) (dx, dy) = (dy, -dx);
+                if (_flip) dx = -dx;
+                int sx = x + dx, sy = y + dy, o = (vy * N + vx) * 4;
+                if (sx < 0 || sy < 0 || sx >= s.W || sy >= s.H) { patch[o] = patch[o + 1] = patch[o + 2] = 14; patch[o + 3] = 255; continue; }
+                int i = (sy * s.W + sx) * 4;
+                (patch[o], patch[o + 1], patch[o + 2], patch[o + 3]) = (shown[i], shown[i + 1], shown[i + 2], 255); // opaque, so alpha doesn't hide color
+            }
+        return patch;
     }
 
     protected override void OnPointerExited(PointerEventArgs e)
@@ -672,7 +786,7 @@ class ImageView : Control, ICustomHitTest
         if (_path == null) return;
         if (_bPath == _path) { ClearCompare(); return; }
         _bPath = _path;
-        _b = null;
+        (_b, _bCache) = (null, null); // re-pinning reads B fresh (it may have been re-rendered)
         (CompareMode, _showB, _wipe) = (CompareMode.Wipe, false, 0.5);
         DropCompare();
         CompareChanged?.Invoke();
@@ -718,25 +832,17 @@ class ImageView : Control, ICustomHitTest
     // Magnifier next to the pointer: 11x11 source pixels, nearest-neighbour, grid and a marked center pixel.
     sealed class LoupeView : Control
     {
-        const int N = 11, Cell = 14, Size = N * Cell;
+        public const int N = 11;
+        const int Cell = 14, Size = N * Cell;
         readonly WriteableBitmap _bmp = new(new PixelSize(N, N), new Avalonia.Vector(96, 96), PixelFormat.Bgra8888, AlphaFormat.Unpremul);
         Point _at;
         bool _shown;
 
-        public unsafe void Show(Point at, int cx, int cy, byte[] src, int w, int h)
+        // patch: N × N BGRA pixels, row by row.
+        public void Show(Point at, byte[] patch)
         {
             using (var fb = _bmp.Lock())
-                for (int y = 0; y < N; y++)
-                {
-                    var row = (byte*)fb.Address + y * fb.RowBytes;
-                    for (int x = 0; x < N; x++)
-                    {
-                        int sx = cx + x - N / 2, sy = cy + y - N / 2;
-                        if (sx < 0 || sy < 0 || sx >= w || sy >= h) { row[x * 4] = row[x * 4 + 1] = row[x * 4 + 2] = 14; row[x * 4 + 3] = 255; continue; }
-                        int i = (sy * w + sx) * 4;
-                        row[x * 4] = src[i]; row[x * 4 + 1] = src[i + 1]; row[x * 4 + 2] = src[i + 2]; row[x * 4 + 3] = 255; // opaque, so alpha doesn't hide color
-                    }
-                }
+                for (int y = 0; y < N; y++) Marshal.Copy(patch, y * N * 4, fb.Address + y * fb.RowBytes, N * 4);
             (_at, _shown) = (at, true);
             InvalidateVisual();
         }

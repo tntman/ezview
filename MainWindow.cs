@@ -123,6 +123,8 @@ class MainWindow : Window
         AddHandler(DoubleTappedEvent, (_, e) =>
         {
             if (e.Source is Visual v && (v.FindAncestorOfType<Button>(true) != null || _bottom.IsPointerOver || _queuePanel.View.IsPointerOver || _outliner.View.IsPointerOver || _info.View.IsPointerOver || _imagePanel.View.IsPointerOver)) return;
+            // A double-click on a gallery tile opens the file with its first click; the second must not toggle fullscreen.
+            if (_keysView.IsVisible || _gallery.View.IsVisible || (DateTime.Now - _gallery.ClosedAt).TotalMilliseconds < 600) return;
             _video?.CancelClick(); // a double-click means fullscreen, never play/pause
             ToggleFullscreen();
         }, Avalonia.Interactivity.RoutingStrategies.Bubble, true);
@@ -331,8 +333,9 @@ class MainWindow : Window
     void Open(string path)
     {
         path = Path.GetFullPath(path);
+        if (Directory.Exists(path)) { ReplaceQueue([path]); return; } // a folder: everything in it
         path = Media.MdlCompanionBase(path) ?? path; // manT.mdl / man01.mdl open their main model
-        _queue = Media.Group(Directory.EnumerateFiles(Path.GetDirectoryName(path)!));
+        _queue = Media.Group(FilesIn(Path.GetDirectoryName(path)!));
         _index = _queue.FindIndex(e => Same(e.Path, path) || e.Frames?.Any(f => Same(f, path)) == true);
         if (_index < 0) { _queue = [new Entry(path)]; _index = 0; }
         _ = ShowCurrent();
@@ -340,10 +343,20 @@ class MainWindow : Window
 
     static bool Same(string a, string b) => string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
 
+    // Files of a folder; empty when it can't be listed (missing, no access) so opening still shows the file itself.
+    static string[] FilesIn(string dir)
+    {
+        try { return Directory.GetFiles(dir); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return []; }
+    }
+
+    // Dropped or picked items: folders contribute their files.
+    static List<Entry> Entries(IEnumerable<string> paths) => Media.Group(paths.SelectMany(p => Directory.Exists(p) ? FilesIn(p) : [p]));
+
     void ReplaceQueue(IEnumerable<string> files)
     {
-        var entries = Media.Group(files);
-        if (entries.Count == 0) return;
+        var entries = Entries(files);
+        if (entries.Count == 0) { if (_queue.Count == 0) ShowMessage("Nothing here ezview can open"); return; }
         _queue = entries;
         _index = 0;
         _ = ShowCurrent();
@@ -351,7 +364,7 @@ class MainWindow : Window
 
     void AddToQueue(IEnumerable<string> files)
     {
-        var entries = Media.Group(files);
+        var entries = Entries(files);
         if (entries.Count == 0) return;
         bool empty = _queue.Count == 0;
         _queue.AddRange(entries);
@@ -364,6 +377,7 @@ class MainWindow : Window
         _queue.RemoveAt(i);
         if (_queue.Count == 0)
         {
+            _index = 0;
             _video?.Stop();
             SetKind(Kind.None);
             _name.Text = _count.Text = "";
@@ -529,13 +543,6 @@ class MainWindow : Window
         bool shift = e.KeyModifiers.HasFlag(KeyModifiers.Shift), ctrl = e.KeyModifiers.HasFlag(KeyModifiers.Control);
         var v = _kind == Kind.Video ? _video : null;
         var pl = Player;
-        // 3D: Space is held for Houdini-style navigation, so playback toggles on release, and only if the view wasn't dragged.
-        if (e.Key == Key.Space && _kind == Kind.Model)
-        {
-            if (!_spaceDown) { _spaceDown = true; _model!.Navigated = false; }
-            e.Handled = true;
-            return;
-        }
         if (_keysView.IsVisible)
         {
             if (e.Key is Key.Escape or Key.F1) _keysView.IsVisible = false;
@@ -546,6 +553,13 @@ class MainWindow : Window
         if (_gallery.View.IsVisible)
         {
             if (e.Key is Key.Escape or Key.G) _gallery.Hide();
+            e.Handled = true;
+            return;
+        }
+        // 3D: Space is held for Houdini-style navigation, so playback toggles on release, and only if the view wasn't dragged.
+        if (e.Key == Key.Space && _kind == Kind.Model)
+        {
+            if (!_spaceDown) { _spaceDown = true; _model!.Navigated = false; }
             e.Handled = true;
             return;
         }
@@ -749,27 +763,37 @@ class MainWindow : Window
 
     // ---- Info ----
 
+    (Entry Entry, long Bytes) _sizeOf;
+
     async void RefreshInfo()
     {
         if (!_info.View.IsVisible || Current is not { } entry) return;
         _infoAt = DateTime.Now;
         var id = ++_infoId;
-        var files = entry.Frames ?? [entry.Path];
-        var fi = new FileInfo(entry.Path);
-        var sections = new List<(string, List<(string, string)>)>
+        try
         {
-            ("File", [
-                ("Name", entry.Name),
-                ("Folder", fi.DirectoryName ?? ""),
-                ("Size", Media.Size(files.Sum(f => new FileInfo(f).Length))),
-                ("Modified", fi.LastWriteTime.ToString("yyyy-MM-dd HH:mm")),
-                ("Created", fi.CreationTime.ToString("yyyy-MM-dd HH:mm")),
-            ]),
-        };
-        if (_kind == Kind.Image) sections.AddRange(await Task.Run(() => ImageInfo(entry.Path)));
-        else if (_kind == Kind.Video && _video != null) sections.AddRange(VideoInfo(_video, entry));
-        else if (_kind == Kind.Model && _model != null) sections.Add(("3D model", _model.Info));
-        if (id == _infoId) _info.Show(sections);
+            var fi = new FileInfo(entry.Path);
+            // A sequence's size is thousands of file lookups: once per entry, not on every refresh while it plays.
+            if (_sizeOf.Entry != entry) _sizeOf = (entry, (entry.Frames ?? [entry.Path]).Sum(f => new FileInfo(f) is { Exists: true } x ? x.Length : 0));
+            var sections = new List<(string, List<(string, string)>)>
+            {
+                ("File", [
+                    ("Name", entry.Name),
+                    ("Folder", fi.DirectoryName ?? ""),
+                    ("Size", Media.Size(_sizeOf.Bytes)),
+                    ("Modified", fi.LastWriteTime.ToString("yyyy-MM-dd HH:mm")),
+                    ("Created", fi.CreationTime.ToString("yyyy-MM-dd HH:mm")),
+                ]),
+            };
+            if (_kind == Kind.Image) sections.AddRange(await Task.Run(() => ImageInfo(entry.Path)));
+            else if (_kind == Kind.Video && _video != null) sections.AddRange(VideoInfo(_video, entry));
+            else if (_kind == Kind.Model && _model != null) sections.Add(("3D model", _model.Info));
+            if (id == _infoId) _info.Show(sections);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ImageMagick.MagickException)
+        {
+            // The file vanished or can't be read: the info panel just stays as it was (async void must not throw).
+        }
     }
 
     static List<(string, List<(string, string)>)> ImageInfo(string path)
@@ -819,7 +843,8 @@ class MainWindow : Window
         if (entry.IsSequence)
         {
             video.Add(("Frames", $"{entry.Frames!.Length}"));
-            video.Add(("Range", $"{entry.FirstFrame}–{entry.FirstFrame + entry.Frames.Length - 1}"));
+            video.Add(("Range", $"{entry.FirstFrame}–{entry.LastFrame}"));
+            if (entry.LastFrame - entry.FirstFrame + 1 is var span && span > entry.Frames.Length) video.Add(("Missing", $"{span - entry.Frames.Length} frames"));
         }
         if (w != "")
         {
@@ -882,17 +907,18 @@ class MainWindow : Window
 
     void Poke()
     {
+        bool wasHidden = _overlay.Opacity < 1;
         _overlay.Opacity = 1;
         _overlay.IsHitTestVisible = true;
         Cursor = Cursor.Default;
         _hide.Stop();
         _hide.Start();
-        if (Player != null) _bottom.Update();
+        if (wasHidden && Player != null) _bottom.Update();
     }
 
     void HideOverlay()
     {
-        if (_queue.Count == 0 || _menuOpen || IsAudio || _top.IsPointerOver || _bottom.IsPointerOver || _zoomBar.IsPointerOver) return;
+        if (_queue.Count == 0 || _menuOpen || IsAudio || _top.IsPointerOver || _bottom.IsPointerOver || _zoomBar.IsPointerOver || _gallery.View.IsVisible || _keysView.IsVisible) return;
         _hide.Stop();
         _overlay.Opacity = 0;
         _overlay.IsHitTestVisible = false;

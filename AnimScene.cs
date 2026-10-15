@@ -44,7 +44,7 @@ sealed class AnimMesh
     public Matrix4x4[]? Instances; // PointInstancer placements (relative to Node); null = drawn once
     public required string Name;
     public required AnimNode Node;
-    public required int[] Tris;
+    public required int[] Tris; // may be cleaned of out-of-range triangles when the scene is prepared for drawing
     public double[] Times = [0];
     public required Vector3[][] Points;
     public Vector4 Color = Vector4.One;

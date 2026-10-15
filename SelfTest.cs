@@ -23,6 +23,11 @@ static class SelfTest
         Trace.Assert(g.Single(e => e.Path.Contains("plate")).Frames!.Length == 2);
         Trace.Assert(g.Count(e => e.Path.Contains("IMG_")) == 2 && g.All(e => !e.Path.Contains("IMG_") || !e.IsSequence));
         Trace.Assert(!g.Single(e => e.Path.Contains("render")).IsSequence);
+        // A sequence with a gap names its real last frame; numbers too long for an int aren't frame numbers.
+        var gap = Media.Group([d + "gap.1001.exr", d + "gap.1002.exr", d + "gap.1005.exr"]).Single();
+        Trace.Assert(gap.LastFrame == 1005 && gap.Name == "gap.[1001–1005].exr", gap.Name);
+        var stamps = Media.Group([d + "cam.20231015120000.jpg", d + "cam.20231015120001.jpg"]);
+        Trace.Assert(stamps.Count == 2 && stamps.All(e => !e.IsSequence), string.Join(", ", stamps.Select(e => e.Name)));
         // HDR: a linear red of 4.0 clips at 0 EV and comes back at −3 EV; linear 0.5 shows as sRGB 188. 8-bit passes through.
         var hdr = new Source([], [4f, 0.5f, 0f, 1f], true, 1, 1);
         var at0 = ImageView.Adjust(hdr, 0, 0, 1);

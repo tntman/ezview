@@ -12,9 +12,11 @@ record Entry(string Path, string[]? Frames = null, int FirstFrame = 0)
     public string Ext => System.IO.Path.GetExtension(Path).ToLowerInvariant();
     public bool IsAudio => Media.AudioExt.Contains(Ext);
     public Kind Kind => IsSequence ? Kind.Video : Media.KindOf(Path);
+    // The real number of the last frame: a sequence with gaps (1001, 1002, 1005) ends at 1005, not 1003.
+    public int LastFrame => Frames is { Length: > 0 } f ? Media.FrameNumber(f[^1]) ?? FirstFrame + f.Length - 1 : FirstFrame;
 
     public string Name => IsSequence
-        ? $"{Media.SeqPrefix(Path)}[{FirstFrame}–{FirstFrame + Frames!.Length - 1}]{Ext}"
+        ? $"{Media.SeqPrefix(Path)}[{FirstFrame}–{LastFrame}]{Ext}"
         : System.IO.Path.GetFileName(Path);
 
     public string Glyph => IsSequence ? "" : Kind switch
@@ -84,6 +86,9 @@ static partial class Media
 
     public static string SeqPrefix(string path) => Frame(path)?.Groups["pre"].Value ?? Path.GetFileNameWithoutExtension(path);
 
+    // Frame number in a sequence file name; null when there is none or it doesn't fit an int (a timestamp, say).
+    public static int? FrameNumber(string path) => Frame(path) is { } m && int.TryParse(m.Groups["num"].Value, out var n) ? n : null;
+
     // Sorted entries for a list of files; frames of the same sequence collapse into one entry.
     public static List<Entry> Group(IEnumerable<string> files)
     {
@@ -91,7 +96,7 @@ static partial class Media
         Array.Sort(sorted, StrCmpLogicalW);
         var seqs = sorted
             .Select(f => (f, m: Frame(f)))
-            .Where(x => x.m != null)
+            .Where(x => x.m != null && int.TryParse(x.m.Groups["num"].Value, out _)) // "cam.20231015120000.jpg" is no frame number
             .GroupBy(x => (Path.GetDirectoryName(x.f), x.m!.Groups["pre"].Value.ToLowerInvariant(), x.m.Groups["num"].Length, x.m.Groups["ext"].Value.ToLowerInvariant()))
             .Where(g => g.Count() >= 2)
             .ToDictionary(g => g.First().f, g => g.Select(x => x.f).ToArray());
@@ -99,7 +104,7 @@ static partial class Media
         var result = new List<Entry>();
         foreach (var f in sorted)
         {
-            if (seqs.TryGetValue(f, out var frames)) result.Add(new Entry(f, frames, int.Parse(Frame(f)!.Groups["num"].Value)));
+            if (seqs.TryGetValue(f, out var frames)) result.Add(new Entry(f, frames, FrameNumber(f)!.Value));
             else if (!inSeq.Contains(f)) result.Add(new Entry(f));
         }
         return result;

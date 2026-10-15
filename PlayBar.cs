@@ -17,6 +17,7 @@ interface IPlayback
     bool Paused { get; }
     int Frame { get; }         // absolute frame number, e.g. 1001
     int FirstFrame { get; }
+    int LastFrame { get; }     // the real last number (sequences can have gaps)
     int FrameCount { get; }
     void TogglePause();
     void Seek(double seconds);
@@ -131,8 +132,8 @@ class PlayBar : Border
         if (!_progress.Dragging) _progress.Value = dur > 0 ? pos / dur : 0;
         int frames = pl.FrameCount, first = pl.FirstFrame, frame = pl.Frame;
         var frameText = frames <= 0 ? ""
-            : _sequence ? $"  ·  {frame} ({first}–{first + frames - 1})"
-            : $"  ·  {frame} / {first + frames - 1}";
+            : _sequence ? $"  ·  {frame} ({first}–{pl.LastFrame})"
+            : $"  ·  {frame} / {pl.LastFrame}";
         _time.Text = $"{Fmt(pos)} / {Fmt(dur)}{frameText}";
         _play.Content = pl.Paused ? "" : "";
         if (pl is not VideoView v) return;

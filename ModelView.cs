@@ -104,9 +104,7 @@ partial class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
         }
         else
         {
-            scene = await Task.Run(() => ImportSkeleton(path));
-            if (scene is { Meshes.Count: > 0 }) (parts, min, max, info) = await Task.Run(() => FromScene(scene));
-            else (parts, min, max, info) = await Task.Run(() => Import(path));
+            (scene, parts, min, max, info) = await Task.Run(() => ImportAssimp(path));
             if (parts.Count == 0 && scene == null) throw new Exception("The file has no geometry or skeleton");
             if (scene != null)
             {
@@ -119,7 +117,9 @@ partial class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
             }
         }
         if (id != _loadId) return;
+        if (parts.Count == 0 && scene?.Bones.Count is null or 0) throw new Exception("The model has no triangles");
         _scene = scene;
+        _moving = scene?.Meshes.Select(Moves).ToArray() ?? [];
         if (scene != null && scene.Meshes.Count == parts.Count) Outline = scene.Outline;
         else
         {
@@ -139,7 +139,6 @@ partial class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
         _frame = _clockFrame = 0;
         _playing = IsAnimated;
         _clock.Restart();
-        if (parts.Count == 0 && scene?.Bones.Count is null or 0) throw new Exception("The model has no triangles");
         _parts = _pending = parts;
         Info = info;
         _center = (min + max) / 2;
@@ -156,12 +155,21 @@ partial class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
     readonly System.Diagnostics.Stopwatch _clock = new();
 
     public bool IsAnimated => _scene is { FrameCount: > 1 };
+    bool[] _moving = []; // per part: recomputed and re-uploaded each frame; static parts are left alone
+
+    static bool Moves(AnimMesh m)
+    {
+        if (m.Animated) return true;
+        for (var n = m.Node; n != null; n = n.Parent) if (n.Times.Length > 1) return true;
+        return false;
+    }
     int N => _scene?.FrameCount ?? 1;
     double SceneFps => _scene?.Fps ?? 24;
     public double Position => _frame / SceneFps;
     public double Duration => (N - 1) / SceneFps;
     public bool Paused => !_playing;
     public int FirstFrame => _scene?.FirstFrame ?? 0;
+    public int LastFrame => FirstFrame + Math.Max(FrameCount, 1) - 1;
     public int FrameCount => IsAnimated ? N : 0;
     public int Frame => FirstFrame + _frame;
 
@@ -204,7 +212,9 @@ partial class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
     {
         var parts = scene.Meshes.Select(m =>
         {
-            var v = new float[m.PointsAt(scene.Start).Length * 8];
+            int count = m.PointsAt(scene.Start).Length;
+            if (m.Tris.Any(i => (uint)i >= (uint)count)) m.Tris = ValidTris(m.Tris, count);
+            var v = new float[count * 8];
             for (int i = 0; m.Uv != null && i < m.Uv.Length && i * 8 < v.Length; i++) { v[i * 8 + 6] = m.Uv[i].X; v[i * 8 + 7] = m.Uv[i].Y; }
             return new Part(v, Array.ConvertAll(m.Tris, i => (uint)i), m.Texture?.Rgba, m.Texture?.W ?? 0, m.Texture?.H ?? 0, m.Color) { Name = m.Name };
         }).ToList();
@@ -245,13 +255,23 @@ partial class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
         return (parts, min, max, info);
     }
 
+    static int[] ValidTris(int[] tris, int count)
+    {
+        var keep = new List<int>(tris.Length);
+        for (int i = 0; i + 2 < tris.Length; i += 3)
+            if ((uint)tris[i] < count && (uint)tris[i + 1] < count && (uint)tris[i + 2] < count) keep.AddRange([tris[i], tris[i + 1], tris[i + 2]]);
+        return [.. keep];
+    }
+
     // World-space points and smooth normals of every mesh at one frame, written into the parts' vertex arrays.
+    // only: when given, meshes marked false (static) are skipped.
     // ponytail: CPU normals every frame; move to a compute pass if million-point caches stutter
-    static void Evaluate(AnimScene scene, int frame, List<Part> parts)
+    static void Evaluate(AnimScene scene, int frame, List<Part> parts, bool[]? only = null)
     {
         double t = scene.TimeOf(frame);
         Parallel.For(0, Math.Min(parts.Count, scene.Meshes.Count), m => // meshes are independent
         {
+            if (only != null && (m >= only.Length || !only[m])) return;
             var mesh = scene.Meshes[m];
             var pts = mesh.PointsAt(t);
             var v = parts[m].Verts;
@@ -377,7 +397,7 @@ partial class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
 
     public static string DumpSkeleton(string path)
     {
-        var sc = ImportSkeleton(path);
+        var sc = ImportAssimp(path).Scene;
         if (sc == null) return "no skeleton";
         return string.Join(Environment.NewLine, sc.Outline.Descendants().Select(n => $"{n.Type,-6} {n.Name}")) + Environment.NewLine +
                string.Join(Environment.NewLine, sc.Bones.Select(b => $"bone {b.Parent.WorldAt(0).Translation} -> {b.Joint.WorldAt(0).Translation}")) + Environment.NewLine +
@@ -389,14 +409,28 @@ partial class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
                })));
     }
 
-    static unsafe AnimScene? ImportSkeleton(string path)
+    // One Assimp read per file (it used to be two). Animated or skinned files become an AnimScene built from the node
+    // tree; static ones (most models) are flattened here, placing each mesh with its node's transform. No
+    // PreTransformVertices: that step would destroy the hierarchy the animated path needs.
+    static unsafe (AnimScene? Scene, List<Part> Parts, Vector3 Min, Vector3 Max, List<(string, string)> Info) ImportAssimp(string path)
     {
         var ai = Ai.Assimp.GetApi();
-        // No flattening: keep the node tree and animations.
         var s = ai.ImportFile(path, (uint)(Ai.PostProcessSteps.Triangulate | Ai.PostProcessSteps.JoinIdenticalVertices |
+                                           Ai.PostProcessSteps.GenerateSmoothNormals | Ai.PostProcessSteps.SortByPrimitiveType |
                                            Ai.PostProcessSteps.FlipUVs | Ai.PostProcessSteps.LimitBoneWeights));
-        if (s == null || s->MRootNode == null) return null;
+        if (s == null) throw new Exception(ai.GetErrorStringS());
         try
+        {
+            var scene = s->MRootNode != null ? SceneOf(ai, s, path) : null;
+            var (parts, min, max, info) = scene is { Meshes.Count: > 0 } ? FromScene(scene) : Flatten(ai, s, path);
+            return (scene, parts, min, max, info);
+        }
+        finally { ai.ReleaseImport(s); }
+    }
+
+    // The node tree + first animation: null for plain static models (they're drawn flattened).
+    static unsafe AnimScene? SceneOf(Ai.Assimp ai, Ai.Scene* s, string path)
+    {
         {
             bool skinned = false;
             for (int i = 0; i < s->MNumMeshes; i++) skinned |= s->MMeshes[i]->MNumBones > 0;
@@ -516,23 +550,31 @@ partial class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
             scene.IndexOutline();
             return scene.Bones.Count > 0 || anim != null ? scene : null;
         }
-        finally { ai.ReleaseImport(s); }
     }
 
     // Local matrix of an animated node at a time in ticks: lerp translation/scale, slerp rotation.
     static unsafe Matrix4x4 Sample(Ai.NodeAnim* ch, double tick)
     {
+        // Last key at or before the tick (MTime is each key's first field).
+        int Before(byte* keys, int stride, uint n)
+        {
+            int lo = 0, hi = (int)n - 1;
+            while (lo < hi)
+            {
+                int mid = (lo + hi + 1) / 2;
+                if (*(double*)(keys + (long)mid * stride) <= tick) lo = mid;
+                else hi = mid - 1;
+            }
+            return lo;
+        }
         Vector3 Vec(Ai.VectorKey* keys, uint n, Vector3 fallback)
         {
             if (n == 0) return fallback;
             if (n == 1 || tick <= keys[0].MTime) return keys[0].MValue;
-            for (uint i = 0; i + 1 < n; i++)
-                if (tick < keys[i + 1].MTime)
-                {
-                    var f = (float)((tick - keys[i].MTime) / (keys[i + 1].MTime - keys[i].MTime));
-                    return Vector3.Lerp(keys[i].MValue, keys[i + 1].MValue, f);
-                }
-            return keys[n - 1].MValue;
+            int i = Before((byte*)keys, sizeof(Ai.VectorKey), n);
+            if (i >= n - 1) return keys[n - 1].MValue;
+            var f = (float)((tick - keys[i].MTime) / (keys[i + 1].MTime - keys[i].MTime));
+            return Vector3.Lerp(keys[i].MValue, keys[i + 1].MValue, f);
         }
         Quaternion Rot(Ai.QuatKey* keys, uint n)
         {
@@ -543,13 +585,10 @@ partial class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
             };
             if (n == 0) return Quaternion.Identity;
             if (n == 1 || tick <= keys[0].MTime) return Q(keys[0].MValue);
-            for (uint i = 0; i + 1 < n; i++)
-                if (tick < keys[i + 1].MTime)
-                {
-                    var f = (float)((tick - keys[i].MTime) / (keys[i + 1].MTime - keys[i].MTime));
-                    return Quaternion.Slerp(Q(keys[i].MValue), Q(keys[i + 1].MValue), f);
-                }
-            return Q(keys[n - 1].MValue);
+            int i = Before((byte*)keys, sizeof(Ai.QuatKey), n);
+            if (i >= n - 1) return Q(keys[n - 1].MValue);
+            var f = (float)((tick - keys[i].MTime) / (keys[i + 1].MTime - keys[i].MTime));
+            return Quaternion.Slerp(Q(keys[i].MValue), Q(keys[i + 1].MValue), f);
         }
         var t = Vec(ch->MPositionKeys, ch->MNumPositionKeys, Vector3.Zero);
         var r = Rot(ch->MRotationKeys, ch->MNumRotationKeys);
@@ -618,30 +657,36 @@ partial class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
         RequestNextFrameRendering();
     }
 
-    static unsafe (List<Part>, Vector3, Vector3, List<(string, string)>) Import(string path)
+    // Static scene: every triangle mesh becomes a part in world space, once per node that uses it.
+    static unsafe (List<Part>, Vector3, Vector3, List<(string, string)>) Flatten(Ai.Assimp ai, Ai.Scene* s, string path)
     {
-        var ai = Ai.Assimp.GetApi();
-        var flags = Ai.PostProcessSteps.Triangulate | Ai.PostProcessSteps.GenerateSmoothNormals |
-                    Ai.PostProcessSteps.JoinIdenticalVertices | Ai.PostProcessSteps.PreTransformVertices |
-                    Ai.PostProcessSteps.FlipUVs | Ai.PostProcessSteps.SortByPrimitiveType;
-        var s = ai.ImportFile(path, (uint)flags);
-        if (s == null) throw new Exception(ai.GetErrorStringS());
-        try
         {
             var dir = Path.GetDirectoryName(path)!;
             var texCache = new Dictionary<string, (byte[], int, int)?>();
             var parts = new List<Part>();
             Vector3 min = new(float.MaxValue), max = new(float.MinValue);
-            for (int i = 0; i < s->MNumMeshes; i++)
+            var placed = new List<(int Mesh, Matrix4x4 World)>();
+            void Walk(Ai.Node* n, Matrix4x4 parent)
+            {
+                var world = Matrix4x4.Transpose(n->MTransformation) * parent; // assimp matrices are column-vector
+                for (int k = 0; k < n->MNumMeshes; k++) placed.Add(((int)n->MMeshes[k], world));
+                for (int c = 0; c < n->MNumChildren; c++) Walk(n->MChildren[c], world);
+            }
+            if (s->MRootNode != null) Walk(s->MRootNode, Matrix4x4.Identity);
+            else for (int i = 0; i < s->MNumMeshes; i++) placed.Add((i, Matrix4x4.Identity));
+            foreach (var (i, world) in placed)
             {
                 var m = s->MMeshes[i];
                 if ((m->MPrimitiveTypes & (uint)Ai.PrimitiveType.Triangle) == 0) continue;
+                // Normals go through the inverse transpose, so non-uniform scale keeps them perpendicular.
+                var normalWorld = Matrix4x4.Invert(world, out var inv) ? Matrix4x4.Transpose(inv) : world;
                 var uv = m->MTextureCoords[0];
                 var v = new float[m->MNumVertices * 8];
                 for (int j = 0; j < m->MNumVertices; j++)
                 {
-                    var p = m->MVertices[j];
-                    var n = m->MNormals != null ? m->MNormals[j] : Vector3.UnitY;
+                    var p = Vector3.Transform(m->MVertices[j], world);
+                    var n = m->MNormals != null && Vector3.TransformNormal(m->MNormals[j], normalWorld) is var tn && tn.LengthSquared() > 0
+                        ? Vector3.Normalize(tn) : Vector3.UnitY;
                     var t = uv != null ? uv[j] : default;
                     min = Vector3.Min(min, p);
                     max = Vector3.Max(max, p);
@@ -674,7 +719,6 @@ partial class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
             };
             return (parts, min, max, info);
         }
-        finally { ai.ReleaseImport(s); }
     }
 
     // Diffuse color, or white plus the diffuse/base-color texture when one loads.
@@ -934,9 +978,11 @@ partial class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
             }
             if (_frameDirty)
             {
-                Evaluate(_scene, _frame, _parts);
-                foreach (var g in _gpu)
+                Evaluate(_scene, _frame, _parts, _moving);
+                for (int i = 0; i < _gpu.Count; i++)
                 {
+                    if (i >= _moving.Length || !_moving[i]) continue;
+                    var g = _gpu[i];
                     gl.BindBuffer(BufferTargetARB.ArrayBuffer, g.Vbo);
                     gl.BufferSubData<float>(BufferTargetARB.ArrayBuffer, 0, g.Part.Verts);
                     if (g.Part.Inst.Length > 1) UploadInstances(gl, g);

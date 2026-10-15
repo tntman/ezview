@@ -49,7 +49,7 @@ unsafe class VideoView : OpenGlControlBase, ICustomHitTest, IPlayback
         foreach (var (k, v) in new[] {
             // ponytail: hw decode + copy to RAM, since ANGLE has no zero-copy interop with mpv; a native d3d11 swapchain avoids the copy if 8K ever stutters
             ("vo", "libmpv"), ("hwdec", "auto-copy-safe"), ("keep-open", "yes"), ("osd-level", "0"),
-            ("input-default-bindings", "no"), ("volume", "25"), ("load-scripts", "no"), ("ytdl", "no"), ("background-color", "#000000"),
+            ("input-default-bindings", "no"), ("volume", "25"), ("volume-max", "100"), ("load-scripts", "no"), ("ytdl", "no"), ("background-color", "#000000"),
             ("screenshot-directory", ScreenshotDir), ("screenshot-format", "png") })
             mpv_set_option_string(_mpv, U8(k), U8(v));
         mpv_initialize(_mpv);
@@ -147,10 +147,12 @@ unsafe class VideoView : OpenGlControlBase, ICustomHitTest, IPlayback
 
     // ---- IPlayback
     public int FrameOffset = 1; // first frame number: 1 for video, e.g. 1001 for an image sequence
+    int[]? _numbers;            // real frame numbers of a sequence, so gaps show the right number
     public double Position => Get("time-pos");
     public double Duration => Get("duration");
     public bool Paused => GetFlag("pause");
     public int FirstFrame => FrameOffset;
+    public int LastFrame => _numbers is { Length: > 0 } n ? n[^1] : FrameOffset + FrameCount - 1;
 
     public int FrameCount => (int)Get("estimated-frame-count") is > 0 and var n ? n
         : Fps > 0 && Duration > 0 ? (int)Math.Round(Duration * Fps) : 0;
@@ -160,7 +162,8 @@ unsafe class VideoView : OpenGlControlBase, ICustomHitTest, IPlayback
         get
         {
             int f = Get("estimated-frame-count") > 0 ? (int)Get("estimated-frame-number") : (int)Math.Round(Position * Fps);
-            return Math.Min(f, Math.Max(FrameCount, 1) - 1) + FrameOffset; // rounding can overshoot on the last frame
+            f = Math.Clamp(f, 0, Math.Max(FrameCount, 1) - 1); // rounding can overshoot on the last frame
+            return _numbers is { Length: > 0 } n ? n[Math.Min(f, n.Length - 1)] : f + FrameOffset;
         }
     }
 
@@ -177,9 +180,10 @@ unsafe class VideoView : OpenGlControlBase, ICustomHitTest, IPlayback
     static string Num(double d) => d.ToString(CultureInfo.InvariantCulture);
 
     // mpv's video output needs the render context, which only exists after the first GL frame.
-    public void Load(string path, bool loop)
+    public void Load(string path, bool loop, int[]? numbers = null)
     {
-        if (_ctx == 0) { _pendingLoad = () => Load(path, loop); RequestNextFrameRendering(); return; }
+        if (_ctx == 0) { _pendingLoad = () => Load(path, loop, numbers); RequestNextFrameRendering(); return; }
+        _numbers = numbers;
         Command("set", "loop-file", loop ? "inf" : "no");
         Command("loadfile", path);
         Command("set", "pause", "no");
@@ -191,9 +195,11 @@ unsafe class VideoView : OpenGlControlBase, ICustomHitTest, IPlayback
     // ponytail: no frame prefetch, 4K EXR may stutter; add a frame cache if it matters
     public void LoadSequence(IEnumerable<string> frames, double fps, bool loop)
     {
-        File.WriteAllLines(SequenceList, frames);
+        var list = frames.ToList();
+        File.WriteAllLines(SequenceList, list);
         Command("set", "mf-fps", Num(fps));
-        Load("mf://@" + SequenceList, loop);
+        var numbers = list.Select(Media.FrameNumber).ToList();
+        Load("mf://@" + SequenceList, loop, numbers.All(n => n != null) ? numbers.Select(n => n!.Value).ToArray() : null);
     }
 
     public void Stop() => Command("stop");

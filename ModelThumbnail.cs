@@ -17,11 +17,7 @@ partial class ModelView
             var ext = Path.GetExtension(path).ToLowerInvariant();
             if (Quake3.Handles(ext)) (parts, min, max, _) = FromQuake(path);
             else if (AnimScene.Handles(ext)) (parts, min, max, _) = FromScene(AnimScene.Load(path));
-            else
-            {
-                var scene = ImportSkeleton(path);
-                (parts, min, max, _) = scene is { Meshes.Count: > 0 } ? FromScene(scene) : Import(path);
-            }
+            else (_, parts, min, max, _) = ImportAssimp(path);
             if (parts.Count == 0 || min.X > max.X) return null;
             return Rasterize(parts, (min + max) / 2, MathF.Max(Vector3.Distance(min, max) / 2, 1e-4f), w, h);
         }
