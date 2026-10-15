@@ -48,9 +48,73 @@ sealed class AnimMesh
     public double[] Times = [0];
     public required Vector3[][] Points;
     public Vector4 Color = Vector4.One;
+    public Vector2[]? Uv; // per point (FBX, glTF …); null = untextured
+    public (byte[] Rgba, int W, int H)? Texture;
 
-    public Vector3[] PointsAt(double t) => Points[AnimScene.SampleIndex(Times, t)];
-    public bool Animated => Points.Length > 1;
+    public Skin? Skin; // skeletal deformation of Points[0] (UsdSkel, FBX bones)
+
+    public Vector3[] PointsAt(double t) => Skin?.Deform(Points[0], t) ?? Points[AnimScene.SampleIndex(Times, t)];
+    public bool Animated => Points.Length > 1 || Skin != null;
+}
+
+// A skeleton: one AnimNode per joint (parented, animated) and each joint's inverse bind matrix.
+sealed class Skeleton
+{
+    public required AnimNode[] Joints;
+    public required Matrix4x4[] InverseBind;
+    double _cachedT = double.NaN;
+    Matrix4x4[] _cached = [];
+
+    // Skinning matrices at time t: inverse(bind) * joint world, cached because every mesh of a character asks.
+    public Matrix4x4[] Transforms(double t)
+    {
+        lock (this)
+        {
+            if (t == _cachedT) return _cached;
+            var m = new Matrix4x4[Joints.Length];
+            for (int j = 0; j < m.Length; j++) m[j] = InverseBind[j] * Joints[j].WorldAt(t);
+            (_cachedT, _cached) = (t, m);
+            return m;
+        }
+    }
+}
+
+// Linear blend skinning of rest points: up to `Influences` (joint, weight) pairs per point, or one set for the
+// whole mesh (constant/rigid binding). Joint indices go through JointMap into the skeleton's joint order.
+sealed class Skin
+{
+    public required Skeleton Skeleton;
+    public required int[] Indices;
+    public required float[] Weights;
+    public required int Influences;
+    public bool Constant;
+    public Matrix4x4 GeomBind = Matrix4x4.Identity;
+    public int[]? JointMap;
+
+    public Vector3[] Deform(Vector3[] rest, double t)
+    {
+        var xf = Skeleton.Transforms(t);
+        var result = new Vector3[rest.Length];
+        Parallel.For(0, rest.Length, i =>
+        {
+            var p = Vector3.Transform(rest[i], GeomBind);
+            int o = Constant ? 0 : i * Influences;
+            Vector3 acc = default;
+            float total = 0;
+            for (int k = 0; k < Influences && o + k < Indices.Length; k++)
+            {
+                float w = Weights[o + k];
+                if (w == 0) continue;
+                int j = Indices[o + k];
+                if (JointMap != null) j = j < JointMap.Length ? JointMap[j] : -1;
+                if (j < 0 || j >= xf.Length) continue;
+                acc += Vector3.Transform(p, xf[j]) * w;
+                total += w;
+            }
+            result[i] = total > 0 ? acc / total : p;
+        });
+        return result;
+    }
 }
 
 sealed class AnimScene

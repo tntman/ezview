@@ -33,7 +33,9 @@ static class Usd
     {
         path = Path.GetFullPath(path);
         var (_, crate) = ReadLayer(path);
-        return Build(Compose(path, [], 0), crate ? "USD (binary)" : "USD (text)");
+        var specs = Compose(path, [], 0);
+        FlattenVariants(specs);
+        return Build(specs, crate ? "USD (binary)" : "USD (text)");
     }
 
     static (Dictionary<string, Spec> Specs, bool Crate) ReadLayer(string path)
@@ -116,6 +118,42 @@ static class Usd
             if (!dst.TryGetValue(target, out var existing)) dst[target] = spec.Clone();
             else if (!ReferenceEquals(existing, spec))
                 foreach (var (k, v) in spec.Fields) existing.Fields.TryAdd(k, v);
+        }
+    }
+
+    // Binary layers keep variant contents under "/Prim/{set=selection}/..." paths. After composition (when every
+    // layer's selections are known) the selected variant — or the first one — is merged into the prim as weaker
+    // opinions and the rest is dropped. Text layers already apply their selection while parsing.
+    static void FlattenVariants(Dictionary<string, Spec> specs)
+    {
+        var firstSeen = new Dictionary<(string Prim, string Set), string>();
+        for (int guard = 0; guard < 16; guard++)
+        {
+            var keys = specs.Keys.Where(k => k.Contains("/{")).OrderBy(k => k.Length).ToList();
+            if (keys.Count == 0) return;
+            foreach (var key in keys)
+            {
+                if (!specs.TryGetValue(key, out var spec)) continue;
+                int open = key.IndexOf("/{", StringComparison.Ordinal), close = key.IndexOf('}', open);
+                if (close < 0) { specs.Remove(key); continue; }
+                var prim = key[..open];
+                var pair = key[(open + 2)..close].Split('=', 2);
+                var (set, choice) = (pair[0], pair.Length > 1 ? pair[1] : "");
+                var fields = specs.GetValueOrDefault(prim)?.Fields;
+                var selected = ((fields?.GetValueOrDefault("variants") ?? fields?.GetValueOrDefault("variantSelection")) as Dictionary<string, object?>)
+                    ?.GetValueOrDefault(set) as string;
+                if (string.IsNullOrEmpty(selected))
+                {
+                    if (!firstSeen.TryGetValue((prim, set), out var first)) firstSeen[(prim, set)] = first = choice;
+                    selected = first;
+                }
+                specs.Remove(key);
+                if (choice != selected) continue;
+                var target = prim + key[(close + 1)..];
+                if (target == "") target = "/";
+                if (!specs.TryGetValue(target, out var existing)) specs[target] = spec;
+                else foreach (var (k, v) in spec.Fields) existing.Fields.TryAdd(k, v);
+            }
         }
     }
 
@@ -221,6 +259,9 @@ static class Usd
 
         static string Leaf(string path) => path[(path.LastIndexOf('/') + 1)..];
 
+        var nodeOf = new Dictionary<string, AnimNode?>();       // prim path -> its transform node (skeletons need theirs)
+        var skinned = new List<(AnimMesh Mesh, string Path)>();
+
         void Visit(string path, AnimNode? parent, OutlineNode outParent, List<AnimMesh> into)
         {
             var spec = specs[path];
@@ -230,6 +271,7 @@ static class Usd
             var node = parent;
             if (Attr(path, "xformOpOrder") is { } order)
                 node = BuildXform(Strings(order.Fields.GetValueOrDefault("default")).ToList(), path, parent, Attr, Samples);
+            nodeOf[path] = node;
             if (type == "Mesh")
             {
                 var (times, pts) = Samples(Attr(path, "points"));
@@ -239,11 +281,13 @@ static class Usd
                 {
                     var color = MaterialColor(path)
                         ?? (Flatten(Attr(path, "primvars:displayColor")?.Fields.GetValueOrDefault("default")).ToArray() is { Length: >= 3 } dc ? new Vector4((float)dc[0], (float)dc[1], (float)dc[2], 1) : Vector4.One);
-                    into.Add(new AnimMesh
+                    var mesh = new AnimMesh
                     {
                         Name = path, Node = node ?? new AnimNode(), Tris = AnimScene.Triangulate(counts, idx),
                         Times = times, Points = pts.Select(Vec3s).ToArray(), Color = color, Outline = outline,
-                    });
+                    };
+                    into.Add(mesh);
+                    if (Attr(path, "primvars:skel:jointIndices") != null) skinned.Add((mesh, path));
                 }
             }
             if (type == "PointInstancer") { Instance(path, node, outline, into); return; } // prototypes are drawn only through it
@@ -289,6 +333,98 @@ static class Usd
 
         scene.Outline.Name = "Stage";
         foreach (var c in children.GetValueOrDefault("/") ?? []) Visit(c, null, scene.Outline, scene.Meshes);
+
+        // ---- UsdSkel: skeleton and animation bindings are inherited down the namespace.
+        static string ParentPath(string p) => p.LastIndexOf('/') is var i and > 0 ? p[..i] : "";
+        string? Inherited(string path, string rel)
+        {
+            for (var p = path; p.Length > 0; p = ParentPath(p))
+                if (Strings(specs.GetValueOrDefault(p + "." + rel)?.Fields.GetValueOrDefault("targetPaths")).FirstOrDefault() is { } t) return t;
+            return null;
+        }
+        Matrix4x4[] Matrices(object? v)
+        {
+            var f = Flatten(v).ToArray();
+            var m = new Matrix4x4[f.Length / 16];
+            for (int i = 0; i < m.Length; i++)
+            {
+                int o = i * 16;
+                m[i] = new((float)f[o], (float)f[o + 1], (float)f[o + 2], (float)f[o + 3], (float)f[o + 4], (float)f[o + 5], (float)f[o + 6], (float)f[o + 7],
+                           (float)f[o + 8], (float)f[o + 9], (float)f[o + 10], (float)f[o + 11], (float)f[o + 12], (float)f[o + 13], (float)f[o + 14], (float)f[o + 15]);
+            }
+            return m;
+        }
+
+        var skeletons = new Dictionary<string, (Skeleton Skel, string[] Joints)?>();
+        (Skeleton Skel, string[] Joints)? SkeletonAt(string skelPath)
+        {
+            if (skeletons.TryGetValue(skelPath, out var done)) return done;
+            var joints = Strings(Attr(skelPath, "joints")?.Fields.GetValueOrDefault("default")).ToArray();
+            var bind = Matrices(Attr(skelPath, "bindTransforms")?.Fields.GetValueOrDefault("default"));
+            if (joints.Length == 0 || bind.Length != joints.Length) return skeletons[skelPath] = null;
+            var parentOf = joints.Select(j => Array.IndexOf(joints, ParentPath("/" + j).TrimStart('/'))).ToArray();
+            var rest = Matrices(Attr(skelPath, "restTransforms")?.Fields.GetValueOrDefault("default"));
+            if (rest.Length != joints.Length) // derive local rest from bind: bind[j] * inverse(bind[parent])
+                rest = joints.Select((_, j) => parentOf[j] >= 0 && Matrix4x4.Invert(bind[parentOf[j]], out var ip) ? bind[j] * ip : bind[j]).ToArray();
+
+            var skelNode = nodeOf.GetValueOrDefault(skelPath) ?? new AnimNode();
+            var nodes = new AnimNode[joints.Length];
+            for (int j = 0; j < joints.Length; j++)
+                nodes[j] = new AnimNode { Parent = parentOf[j] >= 0 ? nodes[parentOf[j]] : skelNode, Locals = [rest[j]] };
+
+            // SkelAnimation: local translation / rotation / scale per joint and time sample.
+            if (Inherited(skelPath, "skel:animationSource") is { } animPath && specs.ContainsKey(animPath))
+            {
+                var animJoints = Strings(Attr(animPath, "joints")?.Fields.GetValueOrDefault("default")).ToArray();
+                var (rt, rv) = Samples(Attr(animPath, "rotations"));
+                var (tt, tv) = Samples(Attr(animPath, "translations"));
+                var (st, sv) = Samples(Attr(animPath, "scales"));
+                var times = rt.Concat(tt).Concat(st).Distinct().Order().ToArray();
+                var r = times.Select(t => Flatten(rv[AnimScene.SampleIndex(rt, t)]).ToArray()).ToArray();
+                var tr = times.Select(t => Flatten(tv[AnimScene.SampleIndex(tt, t)]).ToArray()).ToArray();
+                var sc = times.Select(t => Flatten(sv[AnimScene.SampleIndex(st, t)]).ToArray()).ToArray();
+                for (int k = 0; k < animJoints.Length; k++)
+                {
+                    int j = Array.IndexOf(joints, animJoints[k]);
+                    if (j < 0) continue;
+                    nodes[j].Times = times;
+                    nodes[j].Locals = times.Select((_, i) =>
+                    {
+                        var rest4 = rest[j];
+                        Matrix4x4.Decompose(rest4, out var s0, out var q0, out var t0);
+                        var s = sc[i].Length >= 3 * (k + 1) ? new Vector3((float)sc[i][3 * k], (float)sc[i][3 * k + 1], (float)sc[i][3 * k + 2]) : s0;
+                        var q = r[i].Length >= 4 * (k + 1) ? new Quaternion((float)r[i][4 * k + 1], (float)r[i][4 * k + 2], (float)r[i][4 * k + 3], (float)r[i][4 * k]) : q0; // (real, i, j, k)
+                        var t = tr[i].Length >= 3 * (k + 1) ? new Vector3((float)tr[i][3 * k], (float)tr[i][3 * k + 1], (float)tr[i][3 * k + 2]) : t0;
+                        return Matrix4x4.CreateScale(s) * Matrix4x4.CreateFromQuaternion(Quaternion.Normalize(q)) * Matrix4x4.CreateTranslation(t);
+                    }).ToArray();
+                }
+            }
+            for (int j = 0; j < joints.Length; j++)
+                if (parentOf[j] >= 0) scene.Bones.Add((nodes[j], nodes[parentOf[j]]));
+            var inv = bind.Select(b => Matrix4x4.Invert(b, out var i) ? i : Matrix4x4.Identity).ToArray();
+            return skeletons[skelPath] = (new Skeleton { Joints = nodes, InverseBind = inv }, joints);
+        }
+
+        foreach (var (mesh, path) in skinned)
+        {
+            if (Inherited(path, "skel:skeleton") is not { } skelPath || !specs.ContainsKey(skelPath) || SkeletonAt(skelPath) is not var (skel, joints)) continue;
+            var ji = Attr(path, "primvars:skel:jointIndices");
+            var indices = Ints(ji?.Fields.GetValueOrDefault("default"));
+            var weights = Flatten(Attr(path, "primvars:skel:jointWeights")?.Fields.GetValueOrDefault("default")).Select(w => (float)w).ToArray();
+            int points = mesh.Points[0].Length;
+            bool constant = Strings(ji?.Fields.GetValueOrDefault("interpolation")).FirstOrDefault() == "constant" || indices.Length < points;
+            int influences = Flatten(ji?.Fields.GetValueOrDefault("elementSize")).Select(e => (int)e).FirstOrDefault() is > 0 and var es
+                ? es : Math.Max(1, constant ? indices.Length : indices.Length / Math.Max(1, points));
+            var meshJoints = Strings(Attr(path, "skel:joints")?.Fields.GetValueOrDefault("default")).ToArray();
+            mesh.Skin = new Skin
+            {
+                Skeleton = skel, Indices = indices, Weights = weights, Influences = influences, Constant = constant,
+                GeomBind = Matrices(Attr(path, "primvars:skel:geomBindTransform")?.Fields.GetValueOrDefault("default")).FirstOrDefault(Matrix4x4.Identity),
+                JointMap = meshJoints.Length > 0 ? meshJoints.Select(j => Array.IndexOf(joints, j)).ToArray() : null,
+            };
+            mesh.Node = new AnimNode(); // skinned points come out in world space (the joints carry the skeleton's transform)
+            mesh.Times = skel.Joints.SelectMany(j => j.Times).Distinct().Order().ToArray();
+        }
         scene.IndexOutline();
 
         double start = Flatten(root.GetValueOrDefault("startTimeCode")).DefaultIfEmpty(double.NaN).First() / tcps;
@@ -466,10 +602,10 @@ static class Usd
             var t = Next();
             if (!t.StartsWith('"')) { type = t; t = Next(); }
             var path = (parent == "/" ? "/" : parent + "/") + t[1..];
-            var spec = new Spec();
-            spec.Fields["specifier"] = specifier;
-            if (type != "") spec.Fields["typeName"] = type; // untyped "def" mustn't hide the referenced prim's type
-            _specs[path] = spec;
+            // The same prim can appear several times in one layer (a def, then an "over" inside a variant): merge them.
+            if (!_specs.TryGetValue(path, out var spec)) _specs[path] = spec = new Spec();
+            if (specifier == "def" || !spec.Fields.ContainsKey("specifier")) spec.Fields["specifier"] = specifier;
+            if (type != "") spec.Fields["typeName"] = type; // untyped "def"/"over" mustn't hide a type set elsewhere
             if (Peek() == "(") Metadata(spec);
             Expect("{");
             while (Peek() != "}") Member(path);
@@ -508,7 +644,7 @@ static class Usd
                 Next();
                 a.Fields[field] = field == "timeSamples" ? TimeSamples() : Value();
             }
-            if (Peek() == "(") Skip();
+            if (Peek() == "(") Metadata(a); // interpolation, elementSize …
         }
 
         SortedList<double, object?> TimeSamples()
@@ -717,6 +853,7 @@ static class Usd
                 23 => Doubles(p, 3), 24 => Floats(p, 3), 26 => Ints32(p, 3),
                 27 => Doubles(p, 4), 28 => Floats(p, 4), 30 => Ints32(p, 4),
                 34 => PathListOp(p),
+                45 => Enumerable.Range(0, (int)U64(p)).ToDictionary(i => _tokens[_strings[U32(p + 8 + 8L * i)]], i => (object?)_tokens[_strings[U32(p + 12 + 8L * i)]]),
                 35 => RefListOp(p, reference: true),
                 47 => ReadRef(ref p, reference: false),
                 55 => RefListOp(p, reference: false),
@@ -795,6 +932,7 @@ static class Usd
                 15 => Doubles(p, 16 * m),
                 19 => Doubles(p, 2 * m), 20 => Floats(p, 2 * m), 22 => Ints32(p, 2 * m),
                 23 => Doubles(p, 3 * m), 24 => Floats(p, 3 * m), 26 => Ints32(p, 3 * m),
+                21 => Halves(p, 2 * m), 25 => Halves(p, 3 * m), 29 => Halves(p, 4 * m), 7 => Halves(p, m),
                 27 => Doubles(p, 4 * m), 28 => Floats(p, 4 * m), 30 => Ints32(p, 4 * m),
                 16 => Quats(Doubles(p, 4 * m)), 17 => Quats(Floats(p, 4 * m).Select(x => (double)x).ToArray()), 18 => Quats(Halves(p, 4 * m)),
                 _ => null,

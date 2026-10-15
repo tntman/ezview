@@ -104,8 +104,9 @@ class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
         }
         else
         {
-            (parts, min, max, info) = await Task.Run(() => Import(path));
             scene = await Task.Run(() => ImportSkeleton(path));
+            if (scene is { Meshes.Count: > 0 }) (parts, min, max, info) = await Task.Run(() => FromScene(scene));
+            else (parts, min, max, info) = await Task.Run(() => Import(path));
             if (parts.Count == 0 && scene == null) throw new Exception("The file has no geometry or skeleton");
             if (scene != null)
             {
@@ -113,8 +114,8 @@ class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
                 if (parts.Count == 0) (min, max) = (bmin, bmax);
                 else (min, max) = (Vector3.Min(min, bmin), Vector3.Max(max, bmax));
                 info.Add(("Joints", scene.Bones.Count.ToString("N0")));
-                info.Add(("Frames", scene.FrameCount > 1 ? $"{scene.FirstFrame}–{scene.FirstFrame + scene.FrameCount - 1} ({scene.FrameCount})" : "static"));
-                info.Add(("Frame rate", $"{scene.Fps:0.###} fps"));
+                if (scene.Meshes.Count == 0) info.Add(("Frames", scene.FrameCount > 1 ? $"{scene.FirstFrame}–{scene.FirstFrame + scene.FrameCount - 1} ({scene.FrameCount})" : "static"));
+                if (scene.Meshes.Count == 0) info.Add(("Frame rate", $"{scene.Fps:0.###} fps"));
             }
         }
         if (id != _loadId) return;
@@ -201,7 +202,12 @@ class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
 
     static (List<Part>, Vector3, Vector3, List<(string, string)>) FromScene(AnimScene scene)
     {
-        var parts = scene.Meshes.Select(m => new Part(new float[m.PointsAt(scene.Start).Length * 8], Array.ConvertAll(m.Tris, i => (uint)i), null, 0, 0, m.Color)).ToList();
+        var parts = scene.Meshes.Select(m =>
+        {
+            var v = new float[m.PointsAt(scene.Start).Length * 8];
+            for (int i = 0; m.Uv != null && i < m.Uv.Length && i * 8 < v.Length; i++) { v[i * 8 + 6] = m.Uv[i].X; v[i * 8 + 7] = m.Uv[i].Y; }
+            return new Part(v, Array.ConvertAll(m.Tris, i => (uint)i), m.Texture?.Rgba, m.Texture?.W ?? 0, m.Texture?.H ?? 0, m.Color) { Name = m.Name };
+        }).ToList();
         Vector3 min = new(float.MaxValue), max = new(float.MinValue);
         foreach (var f in new[] { scene.FrameCount - 1, scene.FrameCount / 2, 0 }) // bounds over a few frames; frame 0 last so the parts start there
         {
@@ -374,13 +380,21 @@ class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
         var sc = ImportSkeleton(path);
         if (sc == null) return "no skeleton";
         return string.Join(Environment.NewLine, sc.Outline.Descendants().Select(n => $"{n.Type,-6} {n.Name}")) + Environment.NewLine +
-               string.Join(Environment.NewLine, sc.Bones.Select(b => $"bone {b.Parent.WorldAt(0).Translation} -> {b.Joint.WorldAt(0).Translation}"));
+               string.Join(Environment.NewLine, sc.Bones.Select(b => $"bone {b.Parent.WorldAt(0).Translation} -> {b.Joint.WorldAt(0).Translation}")) + Environment.NewLine +
+               string.Join(Environment.NewLine, sc.Meshes.SelectMany(m => new[] { 0, sc.FrameCount / 2 }.Select(f =>
+               {
+                   var t = sc.TimeOf(f);
+                   var w = m.PointsAt(t).Select(p => Vector3.Transform(p, m.Node.WorldAt(t))).ToArray();
+                   return $"mesh {m.Name} f{f} min {w.Aggregate(Vector3.Min)} max {w.Aggregate(Vector3.Max)}";
+               })));
     }
 
     static unsafe AnimScene? ImportSkeleton(string path)
     {
         var ai = Ai.Assimp.GetApi();
-        var s = ai.ImportFile(path, 0); // no post-processing: keep the node tree and animations
+        // No flattening: keep the node tree and animations.
+        var s = ai.ImportFile(path, (uint)(Ai.PostProcessSteps.Triangulate | Ai.PostProcessSteps.JoinIdenticalVertices |
+                                           Ai.PostProcessSteps.FlipUVs | Ai.PostProcessSteps.LimitBoneWeights));
         if (s == null || s->MRootNode == null) return null;
         try
         {
@@ -411,6 +425,8 @@ class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
             var joints = new HashSet<string>(channels.Keys.Select(Base).Concat(skin));
             var bones = new List<(AnimNode Joint, AnimNode Parent)>();
             var topmost = new HashSet<AnimNode>();
+            var nodeOf = new Dictionary<string, AnimNode>();
+            var meshNodes = new List<(int Mesh, AnimNode Node, OutlineNode Outline)>();
 
             // jointAbove: the nearest real (non-helper) joint up the tree; bones connect real joints, skipping helpers.
             void Walk(Ai.Node* n, AnimNode? parent, OutlineNode outParent, bool isRoot, AnimNode? jointAbove)
@@ -426,7 +442,9 @@ class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
                 bool helper = name.Contains("_$AssimpFbx$_");
                 // End joints (Mixamo "HeadTop_End") have no channel but finish the chain they hang off.
                 bool isJoint = !isRoot && !helper && (joints.Count == 0 || joints.Contains(name) || (n->MNumChildren == 0 && jointAbove != null));
-                var outline = isRoot || helper ? outParent : outParent.Add(name, isJoint ? "Joint" : "Xform");
+                var outline = isRoot || helper ? outParent : outParent.Add(name, isJoint ? "Joint" : n->MNumMeshes > 0 ? "Mesh" : "Xform");
+                nodeOf.TryAdd(name, node);
+                for (int i = 0; i < n->MNumMeshes; i++) meshNodes.Add(((int)n->MMeshes[i], node, outline));
                 if (isJoint)
                 {
                     if (jointAbove != null) bones.Add((node, jointAbove));
@@ -444,6 +462,58 @@ class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
                     bones.Remove(kids[0]);
             }
             scene.Bones = bones;
+
+            // Meshes stay in their own space under their node; skinned ones are deformed by their bones instead.
+            var dir = Path.GetDirectoryName(path)!;
+            var texCache = new Dictionary<string, (byte[], int, int)?>();
+            foreach (var (mi, node, outline) in meshNodes)
+            {
+                var m = s->MMeshes[mi];
+                var tris = new List<int>((int)m->MNumFaces * 3);
+                for (int f = 0; f < m->MNumFaces; f++)
+                    if (m->MFaces[f].MNumIndices == 3) tris.AddRange([(int)m->MFaces[f].MIndices[0], (int)m->MFaces[f].MIndices[1], (int)m->MFaces[f].MIndices[2]]);
+                if (tris.Count == 0) continue;
+                int nv = (int)m->MNumVertices;
+                var pts = new Vector3[nv];
+                for (int j = 0; j < nv; j++) pts[j] = m->MVertices[j];
+                var uv = m->MTextureCoords[0];
+                var (color, tex) = Material(ai, s, m, dir, texCache);
+                var mesh = new AnimMesh
+                {
+                    Name = m->MName.AsString is { Length: > 0 } nm ? nm : outline.Name, Node = node, Tris = [.. tris], Points = [pts],
+                    Color = color, Texture = tex, Outline = outline,
+                    Uv = uv == null ? null : Enumerable.Range(0, nv).Select(j => new Vector2(uv[j].X, uv[j].Y)).ToArray(),
+                };
+                if (m->MNumBones > 0)
+                {
+                    var count = new int[nv];
+                    for (int b = 0; b < m->MNumBones; b++)
+                        for (int w = 0; w < m->MBones[b]->MNumWeights; w++) count[m->MBones[b]->MWeights[w].MVertexId]++;
+                    int inf = Math.Max(1, count.Max());
+                    var idx = new int[nv * inf];
+                    var wts = new float[nv * inf];
+                    Array.Clear(count);
+                    var boneNodes = new AnimNode[m->MNumBones];
+                    var inverseBind = new Matrix4x4[m->MNumBones];
+                    for (int b = 0; b < m->MNumBones; b++)
+                    {
+                        var bone = m->MBones[b];
+                        boneNodes[b] = nodeOf.GetValueOrDefault(bone->MName.AsString) ?? new AnimNode();
+                        inverseBind[b] = Matrix4x4.Transpose(bone->MOffsetMatrix);
+                        for (int w = 0; w < bone->MNumWeights; w++)
+                        {
+                            var vw = bone->MWeights[w];
+                            int o = (int)vw.MVertexId * inf + count[vw.MVertexId]++;
+                            idx[o] = b;
+                            wts[o] = vw.MWeight;
+                        }
+                    }
+                    mesh.Skin = new Skin { Skeleton = new Skeleton { Joints = boneNodes, InverseBind = inverseBind }, Indices = idx, Weights = wts, Influences = inf };
+                    mesh.Node = new AnimNode(); // bone matrices already land in world space
+                }
+                scene.Meshes.Add(mesh);
+            }
+            scene.IndexOutline();
             return scene.Bones.Count > 0 || anim != null ? scene : null;
         }
         finally { ai.ReleaseImport(s); }
@@ -587,19 +657,7 @@ class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
                     if (face.MNumIndices == 3) idx.AddRange([face.MIndices[0], face.MIndices[1], face.MIndices[2]]);
                 }
 
-                var mat = s->MMaterials[m->MMaterialIndex];
-                var color = Vector4.One;
-                ai.GetMaterialColor(mat, "$clr.diffuse", 0, 0, &color);
-                (byte[], int, int)? tex = null;
-                Ai.AssimpString texPath;
-                if (ai.GetMaterialTexture(mat, Ai.TextureType.Diffuse, 0, &texPath, null, null, null, null, null, null) == Ai.Return.Success ||
-                    ai.GetMaterialTexture(mat, Ai.TextureType.BaseColor, 0, &texPath, null, null, null, null, null, null) == Ai.Return.Success)
-                {
-                    var key = texPath.AsString;
-                    if (!texCache.TryGetValue(key, out tex)) texCache[key] = tex = LoadTexture(s, dir, key);
-                }
-                if (tex != null) color = Vector4.One;
-                color.W = 1;
+                var (color, tex) = Material(ai, s, m, dir, texCache);
                 parts.Add(new Part(v, [.. idx], tex?.Item1, tex?.Item2 ?? 0, tex?.Item3 ?? 0, color) { Name = m->MName.AsString is { Length: > 0 } nm ? nm : $"mesh_{i}" });
             }
             var size = max - min;
@@ -617,6 +675,25 @@ class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
             return (parts, min, max, info);
         }
         finally { ai.ReleaseImport(s); }
+    }
+
+    // Diffuse color, or white plus the diffuse/base-color texture when one loads.
+    static unsafe (Vector4, (byte[], int, int)?) Material(Ai.Assimp ai, Ai.Scene* s, Ai.Mesh* m, string dir, Dictionary<string, (byte[], int, int)?> texCache)
+    {
+        var mat = s->MMaterials[m->MMaterialIndex];
+        var color = Vector4.One;
+        ai.GetMaterialColor(mat, "$clr.diffuse", 0, 0, &color);
+        (byte[], int, int)? tex = null;
+        Ai.AssimpString texPath;
+        if (ai.GetMaterialTexture(mat, Ai.TextureType.Diffuse, 0, &texPath, null, null, null, null, null, null) == Ai.Return.Success ||
+            ai.GetMaterialTexture(mat, Ai.TextureType.BaseColor, 0, &texPath, null, null, null, null, null, null) == Ai.Return.Success)
+        {
+            var key = texPath.AsString;
+            if (!texCache.TryGetValue(key, out tex)) texCache[key] = tex = LoadTexture(s, dir, key);
+        }
+        if (tex != null) color = Vector4.One;
+        color.W = 1;
+        return (color, tex);
     }
 
     static unsafe (byte[], int, int)? LoadTexture(Ai.Scene* s, string dir, string path)
