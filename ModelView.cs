@@ -826,7 +826,7 @@ class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
         gl.Uniform1(useLmLoc, 0);
         gl.ActiveTexture(TextureUnit.Texture0);
 
-        if (ShowGrid && _gpu.Count > 0)
+        if (ShowGrid && (_gpu.Count > 0 || HasSkeleton))
         {
             if (_gridDirty) BuildGrid(gl);
             gl.Uniform1(unlitLoc, 1);
