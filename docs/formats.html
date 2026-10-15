@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ezview formats</title>
+<meta name="description" content="Every file type ezview opens: images, camera RAW, video, audio, image sequences and 3D.">
+<link rel="icon" href="ezview.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Nunito+Sans:opsz,wght@6..12,400;6..12,600;6..12,800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  :root { --bg: #0f0f0f; --surface: #141414; --edge: #ffffff1c; --text: #e6e6e6; --muted: #8a8a8a; --accent: #ff5b2e; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.6 "Nunito Sans", system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+  a { color: inherit; }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 16px; }
+  nav { position: sticky; top: 0; z-index: 5; backdrop-filter: blur(14px); background: #0c0c0ccc; border-bottom: 1px solid var(--edge); }
+  nav .wrap { display: flex; align-items: center; gap: 24px; height: 56px; }
+  nav .brand { display: flex; align-items: center; gap: 10px; font-weight: 800; text-decoration: none; }
+  nav .brand img { width: 26px; height: 26px; }
+  nav .links { margin-left: auto; display: flex; gap: 22px; font-size: 14px; color: var(--muted); }
+  nav .links a { text-decoration: none; } nav .links a:hover { color: var(--text); }
+  header { padding: 64px 0 24px; }
+  h1 { font-size: clamp(36px, 6vw, 56px); line-height: 1.05; letter-spacing: -.03em; margin: 0 0 12px; }
+  h1 span { color: var(--accent); }
+  .sub { color: var(--muted); margin: 0; max-width: 62ch; }
+  section { padding: 36px 0; border-top: 1px solid var(--edge); }
+  h2 { font-size: 26px; letter-spacing: -.01em; margin: 0 0 4px; display: flex; align-items: baseline; gap: 12px; }
+  h2 small { font-size: 15px; color: var(--accent); font-weight: 800; }
+  h2 + p { color: var(--muted); margin: 0 0 20px; font-size: 15px; }
+  h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 20px 0 10px; font-weight: 600; }
+  ul { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
+  li { font: 14px/1 "JetBrains Mono", ui-monospace, Consolas, monospace; padding: 8px 11px; background: var(--surface); border: 1px solid var(--edge); border-radius: 7px; }
+  footer { padding: 40px 0 60px; border-top: 1px solid var(--edge); color: var(--muted); font-size: 14px; }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <a class="brand" href="./"><img src="ezview.svg" alt="">ezview</a>
+    <div class="links">
+      <a href="./">Home</a>
+      <a href="https://github.com/tntman/ezview">GitHub</a>
+    </div>
+  </div>
+</nav>
+
+<header>
+  <div class="wrap">
+    <h1>Full list of <span>formats</span></h1>
+    <p class="sub">119 file types open out of the box, and <code>ezview --register</code> adds ezview to "Open with" for all of them.</p>
+  </div>
+</header>
+
+<section>
+  <div class="wrap">
+    <h2>Images <small>46</small></h2>
+    <p>Decoded with ImageMagick. Orientation from EXIF is respected.</p>
+    <h3>Everyday</h3>
+    <ul><li>.jpg</li><li>.jpeg</li><li>.png</li><li>.webp</li><li>.bmp</li><li>.heic</li><li>.heif</li><li>.avif</li><li>.jxl</li><li>.tif</li><li>.tiff</li><li>.ico</li><li>.svg</li><li>.jp2</li><li>.qoi</li></ul>
+    <h3>Pro, HDR &amp; layered</h3>
+    <ul><li>.exr</li><li>.dpx</li><li>.hdr</li><li>.psd</li><li>.psb</li><li>.xcf</li><li>.dds</li><li>.tga</li><li>.pcx</li><li>.ppm</li><li>.pgm</li><li>.pbm</li><li>.pnm</li></ul>
+    <h3>Camera RAW</h3>
+    <ul><li>.dng</li><li>.cr2</li><li>.cr3</li><li>.nef</li><li>.nrw</li><li>.arw</li><li>.sr2</li><li>.orf</li><li>.rw2</li><li>.raf</li><li>.srw</li><li>.pef</li><li>.rwl</li><li>.3fr</li><li>.iiq</li><li>.x3f</li><li>.erf</li><li>.kdc</li></ul>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Video <small>20</small></h2>
+    <p>Played with libmpv and hardware decoding, so any codec mpv handles inside these containers works (H.264, HEVC, AV1, VP9, ProRes…).</p>
+    <ul><li>.mp4</li><li>.m4v</li><li>.mkv</li><li>.webm</li><li>.mov</li><li>.avi</li><li>.wmv</li><li>.asf</li><li>.flv</li><li>.mpg</li><li>.mpeg</li><li>.ts</li><li>.m2ts</li><li>.mts</li><li>.3gp</li><li>.ogv</li><li>.vob</li><li>.rmvb</li><li>.mxf</li><li>.gif</li></ul>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Audio <small>10</small></h2>
+    <p>Plays on the same player bar as video.</p>
+    <ul><li>.mp3</li><li>.flac</li><li>.wav</li><li>.ogg</li><li>.opus</li><li>.m4a</li><li>.aac</li><li>.wma</li><li>.ape</li><li>.aiff</li></ul>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Image sequences</h2>
+    <p>Numbered frames like <code>shot.1001.exr</code> or <code>plate_0001.dpx</code> are grouped and play as one clip with their real frame numbers.</p>
+    <ul><li>.exr</li><li>.dpx</li><li>.png</li><li>.jpg</li><li>.jpeg</li><li>.tif</li><li>.tiff</li><li>.tga</li></ul>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>3D <small>43</small></h2>
+    <p>Meshes via Assimp, plus ezview's own readers for Alembic, USD and Quake 3 maps.</p>
+    <h3>Animation &amp; pipeline</h3>
+    <ul><li>.abc</li><li>.usd</li><li>.usda</li><li>.usdc</li><li>.usdz</li></ul>
+    <h3>Models &amp; scenes</h3>
+    <ul><li>.fbx</li><li>.gltf</li><li>.glb</li><li>.obj</li><li>.dae</li><li>.blend</li><li>.3ds</li><li>.stl</li><li>.ply</li><li>.3mf</li><li>.amf</li><li>.x</li><li>.b3d</li><li>.lwo</li><li>.lws</li><li>.ase</li><li>.ac</li><li>.off</li><li>.nff</li><li>.cob</li><li>.xgl</li><li>.zgl</li><li>.irr</li><li>.irrmesh</li><li>.ms3d</li><li>.smd</li></ul>
+    <h3>Game &amp; legacy</h3>
+    <ul><li>.md2</li><li>.md3</li><li>.md5mesh</li><li>.mdl</li><li>.mdc</li><li>.hmp</li><li>.3d</li><li>.q3o</li><li>.q3s</li><li>.ter</li></ul>
+    <h3>Quake 3 maps</h3>
+    <ul><li>.pk3</li><li>.bsp</li></ul>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap"><a href="./">← Back to ezview</a></div>
+</footer>
+
+</body>
+</html>
