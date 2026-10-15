@@ -130,10 +130,10 @@
       <p class="lede">A fast, minimal media viewer for Windows. <strong>Images, video, image sequences and 3D scenes</strong> in one clean, dark interface.</p>
       <p class="count"><b>119</b> file types out of the box · 46 image · 30 video &amp; audio · 43 3D · <a href="formats.html">Full list of formats →</a></p>
       <div class="cta">
-        <a class="btn primary" id="download" href="https://github.com/tntman/ezview/releases/download/v0.1.1/ezview-0.1.1-win-x64.zip">Download v0.1.1 for Windows</a>
+        <a class="btn primary" id="download" href="https://github.com/tntman/ezview/releases/download/v0.1.3/ezview-0.1.3-win-x64.zip">Download v0.1.3 for Windows</a>
         <a class="btn" href="https://github.com/tntman/ezview">View on GitHub</a>
       </div>
-      <p class="stack"><a id="version" href="https://github.com/tntman/ezview/releases/tag/v0.1.1">v0.1.1</a> (<a href="changelog.html">changelog</a>) · Windows 10/11 x64 · ~100 MB zip · unzip and run <code>ezview.exe</code>, no install needed</p>
+      <p class="stack"><a id="version" href="https://github.com/tntman/ezview/releases/tag/v0.1.3">v0.1.3</a> (<a href="changelog.html">changelog</a>) · Windows 10/11 x64 · ~100 MB zip · unzip and run <code>ezview.exe</code>, no install needed</p>
       <p class="stack">Windows may show a SmartScreen warning since the app isn't signed yet: click <b>More info</b> → <b>Run anyway</b>. It only asks the first time, and again after downloading a new version.</p>
       <p class="stack">C# / .NET 9 · Avalonia · libmpv · ImageMagick · Assimp · own Alembic, USD and Quake 3 readers</p>
     </div>
@@ -190,10 +190,11 @@
       <div class="feature">
         <h3>Image inspection</h3>
         <ul>
-          <li>View RGB, single R / G / B, alpha or luminance</li>
-          <li>Exposure from −6 to +6 EV and gamma 0.2–3</li>
-          <li>Pixel readout: exact RGBA, hex and float under the pointer</li>
-          <li>Adjustments carry over to the next image for comparison</li>
+          <li>Real HDR: EXR, HDR and 16-bit images stay float, so exposure (−6 to +6 EV, in linear light) brings back blown highlights</li>
+          <li>sRGB or raw view transform, gamma 0.2–3, RGB / R / G / B / alpha / luminance and a live histogram</li>
+          <li>Pixel loupe and readout: exact float values for HDR, copy as hex, RGB, float or HSV</li>
+          <li>Compare two images: wipe, flip A / B or a difference view</li>
+          <li>Zoom bar with Fit and 1:1, rotate, flip and a checkerboard behind transparency</li>
         </ul>
       </div>
       <div class="feature">
@@ -239,14 +240,16 @@
         <tr><td><kbd>0</kbd>–<kbd>9</kbd></td><td>Jump to 0–90 % (video)</td></tr>
         <tr><td><kbd>[</kbd> <kbd>]</kbd> <kbd>Backspace</kbd></td><td>Slower / faster / normal speed</td></tr>
         <tr><td><kbd>PgUp</kbd> <kbd>PgDn</kbd></td><td>Previous / next file</td></tr>
-        <tr><td><kbd>R</kbd></td><td>Loop mode</td></tr>
+        <tr><td><kbd>R</kbd></td><td>Loop mode; for images, rotate (<kbd>Shift</kbd>+<kbd>R</kbd> back, <kbd>Shift</kbd>+<kbd>F</kbd> flip)</td></tr>
+        <tr><td><kbd>B</kbd> <kbd>C</kbd> <kbd>Tab</kbd></td><td>Pin image as B / compare mode / flip A and B</td></tr>
       </table>
       <table>
         <tr><td><kbd>Q</kbd> <kbd>I</kbd> <kbd>O</kbd></td><td>Queue / info / outliner</td></tr>
         <tr><td><kbd>E</kbd></td><td>Image inspection panel</td></tr>
         <tr><td><kbd>F</kbd></td><td>Fullscreen; in 3D, frame selection (<kbd>F11</kbd> for fullscreen)</td></tr>
         <tr><td><kbd>W</kbd> <kbd>G</kbd> <kbd>T</kbd> <kbd>B</kbd> <kbd>M</kbd></td><td>Wireframe / grid / textures / skeleton / geometry</td></tr>
-        <tr><td><kbd>0</kbd> <kbd>H</kbd></td><td>Fit / reset view</td></tr>
+        <tr><td><kbd>0</kbd> <kbd>H</kbd></td><td>Fit / actual size (images), reset view (3D)</td></tr>
+        <tr><td><kbd>+</kbd> <kbd>−</kbd></td><td>Zoom in / out</td></tr>
         <tr><td><kbd>Esc</kbd></td><td>Clear selection</td></tr>
       </table>
     </div>
