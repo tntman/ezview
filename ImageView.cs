@@ -223,6 +223,26 @@ class ImageView : Control, ICustomHitTest
         Redraw();
     }
 
+    // Dark 8 px checkerboard behind the image, so transparency is visible against the background.
+    static IBrush? _checker;
+    static IBrush Checker => _checker ??= new DrawingBrush
+    {
+        TileMode = TileMode.Tile, Stretch = Stretch.None,
+        DestinationRect = new RelativeRect(0, 0, 16, 16, RelativeUnit.Absolute),
+        Drawing = new DrawingGroup
+        {
+            Children =
+            {
+                new GeometryDrawing { Brush = new SolidColorBrush(Color.Parse("#1c1c1c")), Geometry = new RectangleGeometry(new Rect(0, 0, 16, 16)) },
+                new GeometryDrawing
+                {
+                    Brush = new SolidColorBrush(Color.Parse("#2a2a2a")),
+                    Geometry = new GeometryGroup { Children = { new RectangleGeometry(new Rect(0, 0, 8, 8)), new RectangleGeometry(new Rect(8, 8, 8, 8)) } },
+                },
+            },
+        },
+    };
+
     public override void Render(DrawingContext ctx) => DrawImage(ctx);
 
     void DrawImage(DrawingContext ctx)
@@ -239,8 +259,10 @@ class ImageView : Control, ICustomHitTest
         if ((Zoom, _fit) != _reported) { _reported = (Zoom, _fit); Avalonia.Threading.Dispatcher.UIThread.Post(() => ZoomChanged?.Invoke()); }
         // Crisp pixels when zoomed far in, smooth otherwise.
         var mode = _zoom * Scale >= 3 ? BitmapInterpolationMode.None : BitmapInterpolationMode.HighQuality;
+        var dest = new Rect(_x, _y, s.Width * _zoom, s.Height * _zoom);
+        ctx.FillRectangle(Checker, dest.Intersect(new Rect(Bounds.Size))); // shows through transparent pixels
         using (ctx.PushRenderOptions(new RenderOptions { BitmapInterpolationMode = mode }))
-            ctx.DrawImage(shown, new Rect(shown.Size), new Rect(_x, _y, s.Width * _zoom, s.Height * _zoom));
+            ctx.DrawImage(shown, new Rect(shown.Size), dest);
     }
 
     protected override void OnSizeChanged(SizeChangedEventArgs e)
