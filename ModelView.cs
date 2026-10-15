@@ -882,6 +882,23 @@ class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
     // Set when the view is dragged, so a Space press used for Houdini-style navigation doesn't also toggle playback.
     public bool Navigated;
 
+    float MinDist => _radius * 0.05f;
+
+    // Dolly by a factor (< 1 = in). Steps never shrink below those at MinDist, and dollying past it carries
+    // the pivot forward along the view, so you can travel through big scenes (Quake maps) instead of stalling.
+    void Dolly(float factor)
+    {
+        float step = MathF.Max(_dist, MinDist) * (1 - factor);
+        float dist = _dist - step;
+        if (dist < MinDist)
+        {
+            var forward = -Vector3.Transform(Vector3.UnitZ, Matrix4x4.CreateFromYawPitchRoll(_yaw, _pitch, 0));
+            _target += forward * (MinDist - dist);
+            dist = MinDist;
+        }
+        _dist = dist;
+    }
+
     // Houdini viewport: LMB tumble, MMB track (pan), RMB dolly. Works with or without Space/Alt held.
     protected override void OnPointerMoved(PointerEventArgs e)
     {
@@ -896,11 +913,11 @@ class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
         else if (pt.Properties.IsMiddleButtonPressed)
         {
             var rot = Matrix4x4.CreateFromYawPitchRoll(_yaw, _pitch, 0);
-            var k = _dist * 0.0015f;
+            var k = MathF.Max(_dist, MinDist) * 0.0015f; // never slower than at the minimum distance
             _target += (Vector3.Transform(Vector3.UnitY, rot) * dy - Vector3.Transform(Vector3.UnitX, rot) * dx) * k;
         }
         else if (pt.Properties.IsRightButtonPressed)
-            _dist = MathF.Max(_radius * 0.01f, _dist * MathF.Pow(0.998f, dx - dy)); // drag right/up = dolly in
+            Dolly(MathF.Pow(0.998f, dx - dy)); // drag right/up = dolly in
         else return;
         Navigated = true;
         RequestNextFrameRendering();
@@ -908,7 +925,7 @@ class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
 
     protected override void OnPointerWheelChanged(PointerWheelEventArgs e)
     {
-        _dist *= MathF.Pow(0.85f, (float)e.Delta.Y);
+        Dolly(MathF.Pow(0.85f, (float)e.Delta.Y));
         RequestNextFrameRendering();
         e.Handled = true;
     }
