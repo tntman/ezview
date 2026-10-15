@@ -199,7 +199,7 @@ class ImageView : Control, ICustomHitTest
     public double Zoom => _zoom * Scale;
     public bool IsFit => _fit;
     public event Action? ZoomChanged;
-    double _reported;
+    (double, bool) _reported;
     public void ZoomBy(double factor) => ZoomAt(new Point(Bounds.Width / 2, Bounds.Height / 2), Math.Clamp(_zoom * factor, 0.01, 64));
 
     // Actual size, centered in the view.
@@ -236,7 +236,7 @@ class ImageView : Control, ICustomHitTest
             _x = (Bounds.Width - s.Width * _zoom) / 2;
             _y = (Bounds.Height - s.Height * _zoom) / 2;
         }
-        if (Zoom != _reported) { _reported = Zoom; Avalonia.Threading.Dispatcher.UIThread.Post(() => ZoomChanged?.Invoke()); }
+        if ((Zoom, _fit) != _reported) { _reported = (Zoom, _fit); Avalonia.Threading.Dispatcher.UIThread.Post(() => ZoomChanged?.Invoke()); }
         // Crisp pixels when zoomed far in, smooth otherwise.
         var mode = _zoom * Scale >= 3 ? BitmapInterpolationMode.None : BitmapInterpolationMode.HighQuality;
         using (ctx.PushRenderOptions(new RenderOptions { BitmapInterpolationMode = mode }))
@@ -245,6 +245,7 @@ class ImageView : Control, ICustomHitTest
 
     protected override void OnSizeChanged(SizeChangedEventArgs e)
     {
+        _drag = null; // a double-click resizing the window must not turn into a pan
         UpdateClip();
         Redraw();
     }
@@ -261,7 +262,7 @@ class ImageView : Control, ICustomHitTest
     protected override void OnPointerPressed(PointerPressedEventArgs e)
     {
         var props = e.GetCurrentPoint(this).Properties;
-        if (!props.IsLeftButtonPressed && !props.IsMiddleButtonPressed) return;
+        if (!props.IsLeftButtonPressed && !props.IsMiddleButtonPressed || e.ClickCount >= 2) return;
         _drag = _pressAt = e.GetPosition(this);
         e.Pointer.Capture(this);
     }

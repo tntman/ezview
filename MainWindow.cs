@@ -179,7 +179,7 @@ class MainWindow : Window
     {
         _zoomText.Text = $"{_image.Zoom * 100:0.#} %";
         _fitBtn.Foreground = _image.IsFit ? Ui.Accent : Ui.Text;
-        _actualBtn.Foreground = Math.Abs(_image.Zoom - 1) < 1e-6 ? Ui.Accent : Ui.Text;
+        _actualBtn.Foreground = !_image.IsFit && Math.Abs(_image.Zoom - 1) < 1e-6 ? Ui.Accent : Ui.Text;
     }
 
     static Button Btn(string glyph, Action click)
