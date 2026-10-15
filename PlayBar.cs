@@ -139,7 +139,15 @@ class PlayBar : Border
         double w = v.Get("width"), h = v.Get("height"), speed = v.Get("speed");
         if (!_volume.Dragging) _volume.Value = v.Get("volume") / 100;
         _mute.Content = v.GetFlag("mute") ? "" : "";
-        _sub.Text = _baseSub + (w > 0 ? $"  ·  {w} × {h}" : "") + (Math.Abs(speed - 1) > 0.01 ? $"  ·  {speed:0.##}×" : "");
+        double fps = _sequence ? 0 : v.Get("container-fps"); // sequences already show their rate
+        if (!_sequence && fps <= 0)
+        {
+            // Containers without a stored rate (some mkv): mpv's measured rate, snapped to a standard one when close.
+            fps = v.Get("estimated-vf-fps");
+            foreach (var std in new[] { 23.976, 24, 25, 29.97, 30, 48, 50, 59.94, 60, 120 })
+                if (Math.Abs(fps - std) < std * 0.002) fps = std;
+        }
+        _sub.Text = _baseSub + (w > 0 ? $"  ·  {w} × {h}" : "") + (fps > 0 ? $"  ·  {fps:0.###} fps" : "") + (Math.Abs(speed - 1) > 0.01 ? $"  ·  {speed:0.##}×" : "");
     }
 
     static string Fmt(double s) => TimeSpan.FromSeconds(Math.Max(s, 0)).ToString(s >= 3600 ? @"h\:mm\:ss" : @"m\:ss");

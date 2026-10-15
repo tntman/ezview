@@ -84,7 +84,8 @@ class MainWindow : Window
         _overlay.Children.Add(_zoomBar = ZoomBar());
         _host.Children.Add(_image);
         _host.Children.Add(_msg);
-        Content = new Panel { Children = { _host, _queuePanel.View, _outliner.View, _info.View, _imagePanel.View, _overlay } };
+        _keysView = KeysView();
+        Content = new Panel { Children = { _host, _queuePanel.View, _outliner.View, _info.View, _imagePanel.View, _overlay, _keysView } };
 
         AddHandler(KeyDownEvent, OnKey, Avalonia.Interactivity.RoutingStrategies.Tunnel);
         AddHandler(KeyUpEvent, (_, e) =>
@@ -94,6 +95,15 @@ class MainWindow : Window
             if (_kind == Kind.Model && _model is { IsAnimated: true, Navigated: false }) { _model.TogglePause(); Poke(); }
         }, Avalonia.Interactivity.RoutingStrategies.Tunnel);
         AddHandler(PointerMovedEvent, (_, _) => Poke(), Avalonia.Interactivity.RoutingStrategies.Tunnel, true);
+        // Mouse wheel over a video: volume (side panels keep their own scrolling).
+        AddHandler(PointerWheelChangedEvent, (_, e) =>
+        {
+            if (_kind != Kind.Video || _video == null || e.Delta.Y == 0 || _keysView.IsVisible
+                || _queuePanel.View.IsPointerOver || _info.View.IsPointerOver) return;
+            _video.Volume(e.Delta.Y > 0 ? 5 : -5);
+            Poke();
+            e.Handled = true;
+        });
         // Right-click without dragging opens the menu (right-drag still pans 3D models).
         Point? rightDown = null;
         AddHandler(PointerPressedEvent, (_, e) =>
@@ -203,6 +213,91 @@ class MainWindow : Window
         _zoomText.Text = $"{_image.Zoom * 100:0.#} %";
         _fitBtn.Foreground = _image.IsFit ? Ui.Accent : Ui.Text;
         _actualBtn.Foreground = !_image.IsFit && Math.Abs(_image.Zoom - 1) < 1e-6 ? Ui.Accent : Ui.Text;
+    }
+
+    // ---- Keyboard shortcuts sheet (F1 or the right-click menu); Esc, the X or a click outside closes it.
+    readonly Panel _keysView;
+
+    Panel KeysView()
+    {
+        (string Title, (string Keys, string What)[] Rows)[] groups =
+        [
+            ("General", [
+                ("← →  PgUp PgDn", "Previous / next file"),
+                ("Double-click  F  F11", "Fullscreen"),
+                ("Q  I", "Queue / info panel"),
+                ("Ctrl+O", "Open file"),
+                ("Esc", "Leave fullscreen, close"),
+                ("F1", "This sheet"),
+            ]),
+            ("Video", [
+                ("Space  K", "Play / pause"),
+                ("← →  , .", "One frame back / forward"),
+                ("Shift+← →  J L  Ctrl+← →", "Jump 5 s / 10 s / 60 s"),
+                ("Home  0–9", "Start / jump to 0–90 %"),
+                ("[  ]  Backspace", "Slower / faster / normal speed"),
+                ("↑ ↓  Wheel  M", "Volume / mute"),
+                ("R  A", "Loop mode / play queue"),
+                ("S", "Save frame"),
+            ]),
+            ("Images", [
+                ("E", "Adjust and inspect panel"),
+                ("0  H", "Fit / actual size"),
+                ("+ −  Wheel", "Zoom"),
+                ("R  Shift+R  Shift+F", "Rotate right / left, flip"),
+                ("B  C  Tab", "Pin as B / compare mode / flip A and B"),
+                ("Ctrl+C", "Copy picked color"),
+            ]),
+            ("3D", [
+                ("LMB  MMB  RMB", "Tumble / pan / dolly"),
+                ("F  H", "Frame selection / reset view"),
+                ("W  G  T", "Wireframe / grid / textures"),
+                ("B  M", "Skeleton / geometry"),
+                ("O  Esc", "Outliner / clear selection"),
+                ("Space", "Play / pause (when not navigating)"),
+            ]),
+        ];
+        var columns = new Grid { ColumnDefinitions = new("*,40,*") };
+        var left = new StackPanel();
+        var right = new StackPanel();
+        Grid.SetColumn(right, 2);
+        columns.Children.Add(left);
+        columns.Children.Add(right);
+        for (int g = 0; g < groups.Length; g++)
+        {
+            var col = g % 2 == 0 ? left : right;
+            col.Children.Add(new TextBlock { Text = groups[g].Title.ToUpperInvariant(), FontSize = 11, LetterSpacing = 1.2, Foreground = Ui.Muted, Margin = new(0, g < 2 ? 0 : 22, 0, 8) });
+            foreach (var (keys, what) in groups[g].Rows)
+            {
+                var row = new Grid { ColumnDefinitions = new("170,*"), Margin = new(0, 3) };
+                var k = new TextBlock { Text = keys, FontSize = 12.5, FontWeight = Avalonia.Media.FontWeight.SemiBold, Foreground = Ui.Text, TextWrapping = TextWrapping.Wrap };
+                var w = new TextBlock { Text = what, FontSize = 12.5, Foreground = Ui.Muted, TextWrapping = TextWrapping.Wrap };
+                Grid.SetColumn(w, 1);
+                row.Children.Add(k);
+                row.Children.Add(w);
+                col.Children.Add(row);
+            }
+        }
+        var close = Btn("\uE711", () => _keysView!.IsVisible = false);
+        close.HorizontalAlignment = HorizontalAlignment.Right;
+        close.CornerRadius = new(8);
+        var card = new Border
+        {
+            Background = Ui.Panel, BorderBrush = Ui.Edge, BorderThickness = new(1), CornerRadius = new(14), Padding = new(28, 18, 28, 28),
+            MaxWidth = 820, Margin = new(24), HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
+            Child = new StackPanel
+            {
+                Children =
+                {
+                    new Grid { Margin = new(0, 0, -14, 10), Children = { new TextBlock { Text = "Keyboard shortcuts", FontSize = 16, FontWeight = Avalonia.Media.FontWeight.Bold, Foreground = Ui.Text, VerticalAlignment = VerticalAlignment.Center }, close } },
+                    new ScrollViewer { Content = columns, MaxHeight = 620 },
+                },
+            },
+        };
+        card.PointerPressed += (_, e) => e.Handled = true; // clicks inside the card don't close it
+        var sheet = new Panel { IsVisible = false, Background = new SolidColorBrush(Color.FromArgb(150, 0, 0, 0)), Children = { card } };
+        sheet.PointerPressed += (_, e) => { sheet.IsVisible = false; e.Handled = true; };
+        return sheet;
     }
 
     static Button Btn(string glyph, Action click)
@@ -424,6 +519,13 @@ class MainWindow : Window
             e.Handled = true;
             return;
         }
+        if (_keysView.IsVisible)
+        {
+            if (e.Key is Key.Escape or Key.F1) _keysView.IsVisible = false;
+            e.Handled = true;
+            return;
+        }
+        if (e.Key == Key.F1) { _keysView.IsVisible = true; e.Handled = true; return; }
         switch (e.Key)
         {
             // Playback (video and animated 3D): arrows step frames, modifiers jump (YouTube/mpv conventions).
@@ -606,6 +708,7 @@ class MainWindow : Window
         }
 
         Group(items);
+        items.Add(Item("\uE765", "Keyboard shortcuts", () => _keysView.IsVisible = true, "F1"));
         items.Add(Item("", "Fullscreen", ToggleFullscreen, "F11", WindowState == WindowState.FullScreen));
         items.Add(Item("", "Close", Close, "Escape"));
 
