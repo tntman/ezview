@@ -741,7 +741,10 @@ class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
 
     static (byte[], int, int) Decode(MagickImage img)
     {
-        using (img) return (img.ToByteArray(MagickFormat.Rgba), (int)img.Width, (int)img.Height);
+        // Pixel export is always 8-bit (the HDRI build's ToByteArray keeps 16-bit samples).
+        using (img)
+        using (var px = img.GetPixelsUnsafe())
+            return (px.ToByteArray(ImageMagick.PixelMapping.RGBA)!, (int)img.Width, (int)img.Height);
     }
 
     protected override void OnOpenGlInit(GlInterface glif)

@@ -20,7 +20,8 @@ class ImagePanel
     readonly Rectangle _swatch = new() { Width = 46, Height = 46, RadiusX = 8, RadiusY = 8, Stroke = Ui.Edge, StrokeThickness = 1, Fill = Brushes.Transparent };
     readonly TextBlock _lockIcon = Ui.Icon("\uE72E", 13);
     TextBlock _loupeChip = null!, _unlock = null!;
-    (int X, int Y, byte R, byte G, byte B, byte A)? _color, _locked;
+    PixelInfo? _color, _locked;
+    readonly HistogramView _histogram = new() { Height = 84, Margin = new(20, 0, 20, 4) };
     bool _updating;
 
     static TextBlock Value() => new() { Foreground = Ui.Text, FontSize = 12.5, VerticalAlignment = VerticalAlignment.Center };
@@ -29,6 +30,10 @@ class ImagePanel
     {
         _image = image;
         var body = new StackPanel { Margin = new(0, 0, 0, 20) };
+
+        body.Children.Add(Ui.Header("Histogram"));
+        body.Children.Add(_histogram);
+        _image.HistogramChanged += _histogram.Set;
 
         body.Children.Add(Ui.Header("Channel"));
         var channels = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, Margin = new(20, 0) };
@@ -96,10 +101,10 @@ class ImagePanel
         }
         body.Children.Add(copy);
 
-        _image.PixelHovered += (x, y, r, g, b, a) => { if (_locked == null) Show((x, y, r, g, b, a)); };
+        _image.PixelHovered += p => { if (_locked == null) Show(p); };
         _image.PixelLeft += () => { if (_locked == null) Show(null); };
         // Click on the image locks that pixel; clicking again unlocks (and shows the pixel under the pointer).
-        _image.PixelClicked += (x, y, r, g, b, a) => Lock(_locked == null ? (x, y, r, g, b, a) : null);
+        _image.PixelClicked += p => Lock(_locked == null ? p : null);
         Show(null);
 
         View = Ui.SidePanel(left: false, new ScrollViewer { Content = body });
@@ -128,18 +133,20 @@ class ImagePanel
         return t;
     }
 
-    void Lock((int, int, byte, byte, byte, byte)? pick)
+    void Lock(PixelInfo? pick)
     {
         _locked = pick;
         Show(pick);
     }
 
-    void Show((int X, int Y, byte R, byte G, byte B, byte A)? c)
+    void Show(PixelInfo? c)
     {
         _color = c ?? _locked;
         bool has = _color != null;
         _pos.Text = has ? $"x {_color!.Value.X}   y {_color.Value.Y}" : "";
-        _rgba.Text = has ? $"R {_color!.Value.R}   G {_color.Value.G}   B {_color.Value.B}   A {_color.Value.A}" : "";
+        _rgba.Text = !has ? ""
+            : _color!.Value.Deep ? string.Format(System.Globalization.CultureInfo.InvariantCulture, "R {0:0.000}   G {1:0.000}   B {2:0.000}   A {3:0.00}", _color.Value.Value.X, _color.Value.Value.Y, _color.Value.Value.Z, _color.Value.Value.W)
+            : $"R {_color.Value.R}   G {_color.Value.G}   B {_color.Value.B}   A {_color.Value.A}";
         _hex.Text = has ? Format("HEX", _color!.Value) : "";
         _swatch.Fill = has ? new SolidColorBrush(Color.FromArgb(_color!.Value.A, _color.Value.R, _color.Value.G, _color.Value.B)) : Brushes.Transparent;
         _swatch.Stroke = _locked != null ? Ui.Accent : Ui.Edge;
@@ -162,10 +169,16 @@ class ImagePanel
         return true;
     }
 
-    static string Format(string format, (int X, int Y, byte R, byte G, byte B, byte A) c)
+    // HEX/RGB/HSV use the on-screen 8-bit color; Float gives the stored value (linear for EXR/HDR).
+    static string Format(string format, PixelInfo c)
     {
         var inv = System.Globalization.CultureInfo.InvariantCulture;
         string F(byte v) => (v / 255.0).ToString("0.000", inv);
+        if (format == "Float" && c.Deep)
+        {
+            var v = c.Value;
+            return string.Format(inv, "{0:0.0000}, {1:0.0000}, {2:0.0000}", v.X, v.Y, v.Z) + (v.W < 1 ? string.Format(inv, ", {0:0.0000}", v.W) : "");
+        }
         switch (format)
         {
             case "HEX": return $"#{c.R:X2}{c.G:X2}{c.B:X2}" + (c.A < 255 ? $"{c.A:X2}" : "");
@@ -208,5 +221,38 @@ class ImagePanel
     {
         _exposureValue.Text = $"{(_image.Exposure >= 0 ? "+" : "")}{_image.Exposure:0.0} EV";
         _gammaValue.Text = $"{_image.Gamma:0.00}";
+    }
+}
+
+// R, G and B histograms of the shown image (square-root scaled so small peaks stay visible).
+sealed class HistogramView : Control
+{
+    int[]? _h;
+    static readonly IBrush[] Fills = [new SolidColorBrush(Color.Parse("#99ff4d4d")), new SolidColorBrush(Color.Parse("#9944dd66")), new SolidColorBrush(Color.Parse("#994d8bff"))];
+
+    public void Set(int[] h)
+    {
+        _h = h;
+        InvalidateVisual();
+    }
+
+    public override void Render(DrawingContext ctx)
+    {
+        var box = new Rect(Bounds.Size);
+        ctx.DrawRectangle(Ui.Bg, null, new RoundedRect(box, 6));
+        if (_h == null) return;
+        double max = Math.Sqrt(Math.Max(1, _h.Max()));
+        for (int c = 0; c < 3; c++)
+        {
+            var g = new StreamGeometry();
+            using (var s = g.Open())
+            {
+                s.BeginFigure(new Point(0, box.Height), true);
+                for (int i = 0; i < 256; i++) s.LineTo(new Point(i / 255.0 * box.Width, box.Height - Math.Sqrt(_h[c * 256 + i]) / max * (box.Height - 4)));
+                s.LineTo(new Point(box.Width, box.Height));
+                s.EndFigure(true);
+            }
+            ctx.DrawGeometry(Fills[c], null, g);
+        }
     }
 }

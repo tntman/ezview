@@ -123,7 +123,8 @@ static class Quake3
                 try
                 {
                     using var img = new MagickImage(bytes, new MagickReadSettings { Format = ext == ".tga" ? MagickFormat.Tga : MagickFormat.Unknown });
-                    result = (img.ToByteArray(MagickFormat.Rgba), (int)img.Width, (int)img.Height);
+                    using var px = img.GetPixelsUnsafe();
+                    result = (px.ToByteArray(PixelMapping.RGBA)!, (int)img.Width, (int)img.Height);
                     break;
                 }
                 catch { /* broken image: try the next extension */ }

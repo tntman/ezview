@@ -23,6 +23,14 @@ static class SelfTest
         Trace.Assert(g.Single(e => e.Path.Contains("plate")).Frames!.Length == 2);
         Trace.Assert(g.Count(e => e.Path.Contains("IMG_")) == 2 && g.All(e => !e.Path.Contains("IMG_") || !e.IsSequence));
         Trace.Assert(!g.Single(e => e.Path.Contains("render")).IsSequence);
+        // HDR: a linear red of 4.0 clips at 0 EV and comes back at −3 EV; linear 0.5 shows as sRGB 188. 8-bit passes through.
+        var hdr = new Source([], [4f, 0.5f, 0f, 1f], true, 1, 1);
+        var at0 = ImageView.Adjust(hdr, 0, 0, 1);
+        var atMinus3 = ImageView.Adjust(hdr, 0, -3, 1);
+        Trace.Assert(at0[2] == 255 && at0[1] == 188 && at0[0] == 0 && at0[3] == 255, "hdr at 0 EV");
+        Trace.Assert(atMinus3[2] == 188, "hdr highlight recovered at -3 EV");
+        byte[] sdr = [10, 128, 250, 77];
+        Trace.Assert(ImageView.Adjust(new Source(sdr, null, false, 1, 1), 0, 0, 1).SequenceEqual(sdr), "8-bit identity");
         // When the local test pack exists: every 3D animation format must decode to the same scene as the .usda text.
         var anim = Path.Combine(AppContext.BaseDirectory, @"..\..\..\..\testpack\3d\anim\");
         if (File.Exists(anim + "anim.usda"))

@@ -139,7 +139,8 @@ class MainWindow : Window
     // Image zoom pill at the bottom: − 100 % + | Fit | 1:1 (fades with the bars).
     readonly Border _zoomBar;
     readonly TextBlock _zoomText = new() { FontSize = 12, Foreground = Ui.Text, MinWidth = 48, TextAlignment = Avalonia.Media.TextAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
-    Button _fitBtn = null!, _actualBtn = null!;
+    Button _fitBtn = null!, _actualBtn = null!, _compareBtn = null!;
+    readonly Border _compareSep = new() { Width = 1, Height = 16, Background = Ui.Edge, Margin = new(4, 0), IsVisible = false };
 
     Border ZoomBar()
     {
@@ -158,6 +159,9 @@ class MainWindow : Window
         _fitBtn = B("Fit", "Fit to window (0)", ResetView);
         _actualBtn = B("1:1", "Actual size (H)", _image.OneToOne);
         _image.ZoomChanged += SyncZoom;
+        _compareBtn = B("", "Compare mode (C), flip A/B (Tab), pin B (B)", () => { if (_image.CompareActive) _image.CycleCompare(); });
+        _compareBtn.IsVisible = false;
+        _image.CompareChanged += SyncCompare;
         return new Border
         {
             IsVisible = false, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Bottom, Margin = new(0, 0, 0, 16),
@@ -169,10 +173,29 @@ class MainWindow : Window
                 {
                     B("", "Zoom out", () => _image.ZoomBy(1 / 1.25), icon: true), _zoomText, B("", "Zoom in", () => _image.ZoomBy(1.25), icon: true),
                     new Border { Width = 1, Height = 16, Background = Ui.Edge, Margin = new(4, 0) },
-                    _fitBtn, _actualBtn,
+                    _fitBtn, _actualBtn, _compareSep, _compareBtn,
                 },
             },
         };
+    }
+
+    IEnumerable<MenuItem> CompareItems()
+    {
+        bool isB = _image.ComparePinned && !_image.CompareActive;
+        yield return Item("", isB ? "Unpin as B" : "Set as compare image (B)", _image.PinCompare, "B");
+        if (!_image.CompareActive) yield break;
+        yield return Choice("Wipe", () => _image.SetCompareMode(CompareMode.Wipe), _image.CompareMode == CompareMode.Wipe);
+        yield return Choice("Flip A / B  (Tab)", _image.SwapAB, _image.CompareMode == CompareMode.Flip);
+        yield return Choice("Difference", () => _image.SetCompareMode(CompareMode.Difference), _image.CompareMode == CompareMode.Difference);
+        yield return Item("", "Stop comparing", _image.ClearCompare);
+    }
+
+    void SyncCompare()
+    {
+        var label = _image.CompareLabel;
+        _compareBtn.IsVisible = _compareSep.IsVisible = label != null;
+        _compareBtn.Content = new TextBlock { Text = label }; // a plain string would treat "_" as an access key
+        _compareBtn.Foreground = _image.CompareActive ? Ui.Accent : Ui.Muted;
     }
 
     void SyncZoom()
@@ -425,17 +448,24 @@ class MainWindow : Window
             case Key.H when _kind == Kind.Model: _model!.Reset(); break;
             case Key.E when _kind == Kind.Image: TogglePanel(_imagePanel.View); break;
             case Key.B when _kind == Kind.Model: _model!.ToggleSkeleton(); break;
+            case Key.B when _kind == Kind.Image: _image.PinCompare(); break;
+            case Key.C when !ctrl && _kind == Kind.Image && _image.CompareActive: _image.CycleCompare(); break;
+            case Key.Tab when _kind == Kind.Image && _image.CompareActive: _image.SwapAB(); break;
+            case Key.OemPlus or Key.Add when _kind == Kind.Image: _image.ZoomBy(1.25); break;
+            case Key.OemMinus or Key.Subtract when _kind == Kind.Image: _image.ZoomBy(1 / 1.25); break;
             case Key.M when _kind == Kind.Model: _model!.ToggleGeometry(); break;
             case Key.O when !ctrl && _kind == Kind.Model: TogglePanel(_outliner.View); break;
             case Key.W when _kind == Kind.Model: _model!.ToggleWireframe(); break;
             case Key.G when _kind == Kind.Model: _model!.ToggleGrid(); break;
             case Key.T when _kind == Kind.Model: _model!.ToggleTextures(); break;
+            case Key.R when _kind == Kind.Image: _image.Rotate(shift ? -1 : 1); break;
             case Key.R: CycleLoop(); break;
             case Key.A when Player is VideoView: TogglePlayQueue(); break;
             case Key.Left or Key.PageUp: Step(-1); break;
             case Key.Right or Key.PageDown: Step(1); break;
             case Key.Q: TogglePanel(_queuePanel.View); break;
             case Key.I: TogglePanel(_info.View); break;
+            case Key.F when shift && _kind == Kind.Image: _image.FlipHorizontal(); break;
             case Key.F when _kind == Kind.Model: _model!.FocusSelected(); break;
             case Key.F or Key.F11: ToggleFullscreen(); break;
             case Key.Escape when _kind == Kind.Model && _model!.Selected != null: _model.Select(null); break;
@@ -534,6 +564,11 @@ class MainWindow : Window
             Group(items);
             items.Add(Item("", "Fit to window", ResetView, "D0"));
             items.Add(Item("", "Actual size", _image.OneToOne, "H"));
+            items.Add(Item("\uE7AD", "Rotate right", () => _image.Rotate(1), "R"));
+            items.Add(Item("\uE7AD", "Rotate left", () => _image.Rotate(-1), "Shift+R"));
+            items.Add(Item("\uE8AB", "Flip horizontal", _image.FlipHorizontal, "Shift+F"));
+            items.Add(Item("\uE8AB", "Flip vertical", _image.FlipVertical));
+            items.Add(Sub("\uE8A9", "Compare", CompareItems()));
             items.Add(Item("\uE790", "Adjust image\u2026", () => TogglePanel(_imagePanel.View), "E", _imagePanel.View.IsVisible || _image.Adjusted));
         }
         else if (_kind == Kind.Model)
