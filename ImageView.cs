@@ -202,7 +202,17 @@ class ImageView : Control, ICustomHitTest
     double _reported;
     public void ZoomBy(double factor) => ZoomAt(new Point(Bounds.Width / 2, Bounds.Height / 2), Math.Clamp(_zoom * factor, 0.01, 64));
 
-    public void OneToOne() => ZoomAt(new Point(Bounds.Width / 2, Bounds.Height / 2), 1 / Scale);
+    // Actual size, centered in the view.
+    public void OneToOne()
+    {
+        if (_bmp == null) return;
+        var s = _bmp.PixelSize;
+        _zoom = 1 / Scale;
+        _x = (Bounds.Width - s.Width * _zoom) / 2;
+        _y = (Bounds.Height - s.Height * _zoom) / 2;
+        _fit = false;
+        Redraw();
+    }
 
     void ZoomAt(Point p, double zoom)
     {
