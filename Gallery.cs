@@ -98,7 +98,7 @@ class Gallery
         View.IsVisible = false;
     }
 
-    static bool Thumbnailable(Entry e) => e.IsSequence || e.Kind is Kind.Image or Kind.None;
+    static bool Thumbnailable(Entry e) => true; // images ourselves, everything else via Windows
     static string ThumbPath(Entry e) => e.IsSequence ? e.Frames![0] : e.Path;
 
     static void SetThumb(Image target, TextBlock glyph, Bitmap? thumb)
@@ -151,6 +151,7 @@ class Gallery
     // (including the view transform for EXR/HDR, so thumbnails match the viewer).
     static Bitmap? Thumb(string path)
     {
+        if (Media.KindOf(path) is not (Kind.Image or Kind.None)) return ShellThumbnail.Get(path, ThumbSize); // video, gif, 3D: Explorer's thumbnail
         var ext = Path.GetExtension(path).ToLowerInvariant();
         if (ext is ".jpg" or ".jpeg" or ".png" or ".webp" or ".bmp")
         {
