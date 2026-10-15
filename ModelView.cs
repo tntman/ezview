@@ -19,12 +19,14 @@ class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
     {
         public Matrix4x4[] Inst { get; set; } = [Matrix4x4.Identity];
         public string Name { get; init; } = "";
+        public float[]? LmUv { get; init; } // baked lighting (Quake 3 maps): uv per vertex + 128x128 RGBA
+        public byte[]? Lm { get; init; }
     }
     sealed class GpuPart(Part part, uint vao, uint vbo, uint ebo, uint tex)
     {
         public readonly Part Part = part;
         public readonly uint Vao = vao, Vbo = vbo, Ebo = ebo, Tex = tex;
-        public uint InstVbo;
+        public uint InstVbo, LmVbo, LmTex;
         public uint LineVao, LineEbo; // wireframe edges, built the first time wireframe is shown
         public int LineCount;
     }
@@ -34,18 +36,28 @@ class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
         layout(location = 1) in vec3 n;
         layout(location = 2) in vec2 t;
         layout(location = 3) in mat4 inst;  // per instance; identity for ordinary meshes
+        layout(location = 7) in vec2 lmt;   // lightmap uv (only bound for lightmapped surfaces)
         uniform mat4 mvp;
-        out vec3 vp; out vec3 vn; out vec2 vt;
-        void main() { vec4 wp = inst * vec4(p, 1.0); gl_Position = mvp * wp; gl_PointSize = 7.0; vp = wp.xyz; vn = mat3(inst) * n; vt = t; }
+        out vec3 vp; out vec3 vn; out vec2 vt; out vec2 vlm;
+        void main() { vec4 wp = inst * vec4(p, 1.0); gl_Position = mvp * wp; gl_PointSize = 7.0; vp = wp.xyz; vn = mat3(inst) * n; vt = t; vlm = lmt; }
         """;
     const string Fs = """
-        in vec3 vp; in vec3 vn; in vec2 vt;
-        uniform sampler2D tex; uniform vec4 col; uniform vec3 eye; uniform int unlit;
+        in vec3 vp; in vec3 vn; in vec2 vt; in vec2 vlm;
+        uniform sampler2D tex; uniform sampler2D lm; uniform vec4 col; uniform vec3 eye; uniform int unlit; uniform int useLm;
         out vec4 o;
         void main() {
             if (unlit == 1) { o = col; return; }  // wireframe lines and grid
             vec4 c = texture(tex, vt) * col;
             if (c.a < 0.5) discard;
+            if (useLm == 1)
+            {
+                // Baked light: Quake 3 brightens lightmaps 4x (2x on load, 2x via gamma) and scales an
+                // over-bright texel down as a whole so it keeps its hue.
+                vec3 l = texture(lm, vlm).rgb * 4.0;
+                l /= max(1.0, max(l.r, max(l.g, l.b)));
+                o = vec4(c.rgb * l, 1.0);
+                return;
+            }
             float d = abs(dot(normalize(vn), normalize(eye - vp)));  // headlight, two-sided
             o = vec4(c.rgb * (0.3 + 0.7 * d), 1.0);
         }
@@ -82,7 +94,9 @@ class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
         List<Part> parts;
         Vector3 min, max;
         List<(string, string)> info;
-        if (AnimScene.Handles(Path.GetExtension(path).ToLowerInvariant()))
+        if (Quake3.Handles(Path.GetExtension(path).ToLowerInvariant()))
+            (parts, min, max, info) = await Task.Run(() => FromQuake(path));
+        else if (AnimScene.Handles(Path.GetExtension(path).ToLowerInvariant()))
         {
             scene = await Task.Run(() => AnimScene.Load(path));
             (parts, min, max, info) = await Task.Run(() => FromScene(scene));
@@ -165,6 +179,21 @@ class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
         _clock.Restart();
         _frameDirty = true;
         RequestNextFrameRendering();
+    }
+
+    static (List<Part>, Vector3, Vector3, List<(string, string)>) FromQuake(string path)
+    {
+        var (surfaces, info) = Quake3.Load(path);
+        var parts = surfaces.Select(s => new Part(s.Verts, s.Idx, s.Rgba, s.W, s.H, Vector4.One) { Name = s.Texture, LmUv = s.LmUv, Lm = s.Lm }).ToList();
+        Vector3 min = new(float.MaxValue), max = new(float.MinValue);
+        foreach (var p in parts)
+            for (int i = 0; i < p.Verts.Length; i += 8)
+            {
+                var v = new Vector3(p.Verts[i], p.Verts[i + 1], p.Verts[i + 2]);
+                min = Vector3.Min(min, v);
+                max = Vector3.Max(max, v);
+            }
+        return (parts, min, max, info);
     }
 
     static (List<Part>, Vector3, Vector3, List<(string, string)>) FromScene(AnimScene scene)
@@ -631,6 +660,15 @@ class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
         var g = new GpuPart(p, vao, vbo, ebo, p.Rgba != null ? Texture(gl, p.Rgba, p.TexW, p.TexH) : 0) { InstVbo = gl.GenBuffer() };
         UploadInstances(gl, g);
         InstanceAttribs(gl, g.InstVbo);
+        if (p.LmUv != null && p.Lm != null)
+        {
+            g.LmVbo = gl.GenBuffer();
+            gl.BindBuffer(BufferTargetARB.ArrayBuffer, g.LmVbo);
+            gl.BufferData<float>(BufferTargetARB.ArrayBuffer, p.LmUv, BufferUsageARB.StaticDraw);
+            gl.EnableVertexAttribArray(7);
+            gl.VertexAttribPointer(7, 2, VertexAttribPointerType.Float, false, 8, (void*)0);
+            g.LmTex = Texture(gl, p.Lm, 128, 128);
+        }
         gl.BindVertexArray(0);
         return g;
     }
@@ -712,6 +750,7 @@ class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
         {
             if (g.LineVao != 0) { gl.DeleteVertexArray(g.LineVao); gl.DeleteBuffer(g.LineEbo); }
             gl.DeleteBuffer(g.InstVbo);
+            if (g.LmVbo != 0) { gl.DeleteBuffer(g.LmVbo); gl.DeleteTexture(g.LmTex); }
             gl.DeleteVertexArray(g.Vao);
             gl.DeleteBuffer(g.Vbo);
             gl.DeleteBuffer(g.Ebo);
@@ -782,6 +821,9 @@ class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
         gl.Uniform1(gl.GetUniformLocation(_prog, "tex"), 0);
         var colLoc = gl.GetUniformLocation(_prog, "col");
         var unlitLoc = gl.GetUniformLocation(_prog, "unlit");
+        var useLmLoc = gl.GetUniformLocation(_prog, "useLm");
+        gl.Uniform1(gl.GetUniformLocation(_prog, "lm"), 1);
+        gl.Uniform1(useLmLoc, 0);
         gl.ActiveTexture(TextureUnit.Texture0);
 
         if (ShowGrid && _gpu.Count > 0)
@@ -816,6 +858,8 @@ class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
                 if (!Shown(i)) continue;
                 // Textures off: plain white clay, so the shape reads without materials.
                 var c = Textures ? g.Part.Color : Vector4.One;
+                gl.Uniform1(useLmLoc, g.LmTex != 0 ? 1 : 0);
+                if (g.LmTex != 0) { gl.ActiveTexture(TextureUnit.Texture1); gl.BindTexture(TextureTarget.Texture2D, g.LmTex); gl.ActiveTexture(TextureUnit.Texture0); }
                 gl.BindTexture(TextureTarget.Texture2D, Textures && g.Tex != 0 ? g.Tex : _white);
                 gl.Uniform4(colLoc, c.X, c.Y, c.Z, c.W);
                 gl.BindVertexArray(g.Vao);

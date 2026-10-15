@@ -39,7 +39,7 @@ static partial class Media
         ".obj", ".fbx", ".gltf", ".glb", ".stl", ".ply", ".3ds", ".dae", ".blend", ".3mf", ".amf", ".x", ".b3d", ".lwo", ".lws",
         ".ase", ".ac", ".off", ".nff", ".cob", ".xgl", ".zgl", ".irr", ".irrmesh", ".ms3d", ".smd",
         ".md2", ".md3", ".md5mesh", ".mdl", ".mdc", ".hmp", ".3d", ".q3o", ".q3s", ".ter",
-        ".abc", ".usd", ".usda", ".usdc", ".usdz", ".pk3"];
+        ".abc", ".usd", ".usda", ".usdc", ".usdz", ".pk3", ".bsp"];
     static readonly HashSet<string> SequenceExt = [".exr", ".dpx", ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".tga"];
 
     public static IEnumerable<string> AllExtensions => ImageExt.Concat(VideoExt).Concat(ModelExt);
