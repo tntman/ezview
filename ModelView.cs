@@ -250,12 +250,12 @@ class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
     static void Evaluate(AnimScene scene, int frame, List<Part> parts)
     {
         double t = scene.TimeOf(frame);
-        for (int m = 0; m < Math.Min(parts.Count, scene.Meshes.Count); m++)
+        Parallel.For(0, Math.Min(parts.Count, scene.Meshes.Count), m => // meshes are independent
         {
             var mesh = scene.Meshes[m];
             var pts = mesh.PointsAt(t);
             var v = parts[m].Verts;
-            if (pts.Length * 8 != v.Length) continue; // point count changed mid-cache: keep the last good frame
+            if (pts.Length * 8 != v.Length) return; // point count changed mid-cache: keep the last good frame
             var world = mesh.Node.WorldAt(t) * scene.Root;
             var pos = new Vector3[pts.Length];
             if (mesh.Instances != null)
@@ -279,7 +279,7 @@ class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
                 pos[i].CopyTo(v, i * 8);
                 n.CopyTo(v, i * 8 + 3);
             }
-        }
+        });
     }
 
     // ---- Outliner: per-part visibility from the tree's eye toggles and an optional solo subtree.

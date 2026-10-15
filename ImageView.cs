@@ -74,10 +74,43 @@ class ImageView : Control, ICustomHitTest
         _layer.InvalidateVisual();
     }
 
+    // Neighbours in the queue are decoded ahead, so stepping through a folder shows the next image at once.
+    readonly Dictionary<string, Task<(Bitmap, Source?)>> _ahead = new(StringComparer.OrdinalIgnoreCase);
+
+    public void Prefetch(IEnumerable<string> paths)
+    {
+        // ponytail: files over 64 MB are skipped, they'd hold hundreds of MB decoded; a size-aware budget if that matters
+        var want = paths.Where(p => !string.Equals(p, _path, StringComparison.OrdinalIgnoreCase) && new FileInfo(p).Length < 64 << 20)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var (p, t) in _ahead.Where(kv => !want.Contains(kv.Key)).ToList())
+        {
+            _ahead.Remove(p);
+            _ = t.ContinueWith(x => { if (x.IsCompletedSuccessfully) x.Result.Item1.Dispose(); });
+        }
+        foreach (var p in want)
+            if (!_ahead.ContainsKey(p)) _ahead[p] = Task.Run(() => Decode(p));
+    }
+
     public async Task Load(string path)
     {
         var id = ++_loadId;
-        var (bmp, src) = await Task.Run(() => Decode(path));
+        var full = _ahead.Remove(path, out var ready) ? ready : Task.Run(() => Decode(path));
+        // Big photos: a quick screen-sized decode first, swapped for the full image when it's ready.
+        double previewWidth = 0;
+        if (!full.IsCompleted && await Task.Run(() => Preview(path)) is { } preview)
+        {
+            if (id != _loadId || full.IsCompleted) preview.Dispose();
+            else
+            {
+                Show(preview, path, null);
+                previewWidth = preview.PixelSize.Width;
+                Fit();
+            }
+        }
+        Bitmap bmp;
+        Source? src;
+        try { (bmp, src) = await full; }
+        catch when (id != _loadId) { return; }
         if (id != _loadId) { bmp.Dispose(); return; }
         Source? b = null;
         if (_bPath != null && _bPath != path)
@@ -86,20 +119,42 @@ class ImageView : Control, ICustomHitTest
             try { b = await Task.Run(() => ReadFile(bp, size.Width, size.Height)); } catch { }
             if (id != _loadId) { bmp.Dispose(); return; }
         }
-        _bmp?.Dispose();
-        _bmp = bmp;
-        _path = path;
-        _src = src;
+        bool zoomedPreview = previewWidth > 0 && !_fit;
+        if (zoomedPreview) _zoom *= previewWidth / bmp.PixelSize.Width; // same view, now in full-size pixels
+        Show(bmp, path, src);
         _b = b;
-        _shown?.Dispose();
-        _shown = null;
-        _shownBytes = null;
-        (_rot, _flip) = (0, false);
         // Settings carry over, so images can be compared the same way.
         if (Adjusted || Inspecting || CompareActive) _ = Rebuild();
         else DropCompare();
         CompareChanged?.Invoke();
-        Fit();
+        if (zoomedPreview) Redraw();
+        else Fit();
+    }
+
+    void Show(Bitmap bmp, string path, Source? src)
+    {
+        if (_path != path) (_rot, _flip) = (0, false);
+        _bmp?.Dispose();
+        _bmp = bmp;
+        _path = path;
+        _src = src;
+        _shown?.Dispose();
+        _shown = null;
+        _shownBytes = null;
+    }
+
+    // Screen-sized decode of a large Skia-readable file (null when not worth it or EXIF-rotated).
+    static Bitmap? Preview(string path)
+    {
+        var ext = Path.GetExtension(path).ToLowerInvariant();
+        if (!Fast.Contains(ext) || new FileInfo(path).Length < 1 << 20) return null;
+        using (var info = new MagickImage())
+        {
+            info.Ping(path); // header only
+            if (info.Width * info.Height < 16_000_000 || info.Orientation is not (OrientationType.TopLeft or OrientationType.Undefined)) return null;
+        }
+        using var stream = File.OpenRead(path);
+        return Bitmap.DecodeToWidth(stream, 2560, BitmapInterpolationMode.MediumQuality);
     }
 
     // ---- Inspection: channel view, exposure and gamma, histogram and a pixel readout.

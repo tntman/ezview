@@ -143,6 +143,12 @@ class MainWindow : Window
         _tick.Start();
 
         ShowMessage("Drop a file here or press Ctrl+O");
+        SingleInstance.Listen(p =>
+        {
+            Open(p);
+            if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
+            Activate();
+        });
         Opened += (_, _) => { if (startFile != null) Open(startFile); };
     }
 
@@ -415,7 +421,11 @@ class MainWindow : Window
             SetKind(kind);
             switch (kind)
             {
-                case Kind.Image: await _image.Load(entry.Path); break;
+                case Kind.Image:
+                    await _image.Load(entry.Path);
+                    _image.Prefetch(new[] { _index + 1, _index - 1 }
+                        .Where(i => i >= 0 && i < _queue.Count && _queue[i].Kind == Kind.Image && !_queue[i].IsSequence).Select(i => _queue[i].Path));
+                    break;
                 case Kind.Video:
                     _loadedAt = DateTime.Now;
                     bool loop = _loop == LoopMode.File || entry.Ext == ".gif";

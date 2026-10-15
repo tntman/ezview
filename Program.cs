@@ -76,6 +76,7 @@ static class Program
         if (args is ["--skel", var skelFile]) { Console.WriteLine(ModelView.DumpSkeleton(skelFile)); return; }
         if (args is ["--specs", var layer]) { Console.WriteLine(Usd.DumpSpecs(layer)); return; }
         if (args is ["--dump", var file]) { Console.WriteLine(AnimScene.Load(file).Summary()); return; }
+        if (SingleInstance.HandOff(args is [var open] && !open.StartsWith("--") ? open : null)) return;
         AppBuilder.Configure<App>()
             .UsePlatformDetect()
             .With(new FontManagerOptions { DefaultFamilyName = Ui.FontUri })

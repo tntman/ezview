@@ -9,6 +9,7 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <RootNamespace>EzView</RootNamespace>
     <AssemblyName>ezview</AssemblyName>
+    <PublishReadyToRun>true</PublishReadyToRun> <!-- precompiled: faster startup -->
     <ApplicationIcon>Assets\ezview.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup>
