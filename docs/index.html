@@ -74,7 +74,7 @@
 
   .gallery { display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; }
   .gallery figure { margin: 0; }
-  .gallery figure:first-child { grid-column: 1 / -1; }
+  .gallery figure:first-child, .gallery figure:last-child:nth-child(even) { grid-column: 1 / -1; }
   .gallery a { display: block; border-radius: 12px; overflow: hidden; border: 1px solid var(--edge); box-shadow: 0 20px 50px #0008; transition: transform .2s, border-color .2s; }
   .gallery a:hover { transform: translateY(-2px); border-color: #ff5b2e66; }
   .gallery img { display: block; width: 100%; height: auto; }
@@ -141,6 +141,7 @@
       <figure><a href="shots/photo-info.jpg"><img src="shots/photo-info.jpg" width="1440" height="900" alt="JPEG photo with the info panel showing metadata and EXIF" loading="lazy"></a><figcaption><b>JPEG</b> · info panel with metadata and EXIF</figcaption></figure>
       <figure><a href="shots/video.jpg"><img src="shots/video.jpg" width="1440" height="900" alt="AV1 video playing with the player bar" loading="lazy"></a><figcaption><b>AV1 / MKV</b> · player bar with frame counter</figcaption></figure>
       <figure><a href="shots/sequence.jpg"><img src="shots/sequence.jpg" width="1440" height="900" alt="EXR image sequence playing as a clip with frame numbers" loading="lazy"></a><figcaption><b>Image sequence</b> · shot.[1001–1048].exr as one clip</figcaption></figure>
+      <figure><a href="shots/anim-abc.jpg"><img src="shots/anim-abc.jpg" width="1440" height="900" alt="Animated Alembic scene playing with the timeline" loading="lazy"></a><figcaption><b>Alembic</b> · animated 3D scene on a timeline, frame by frame</figcaption></figure>
       <figure><a href="shots/helmet.jpg"><img src="shots/helmet.jpg" width="1440" height="900" alt="Textured glTF damaged helmet model" loading="lazy"></a><figcaption><b>glTF</b> · textured model</figcaption></figure>
       <figure><a href="shots/fbx-wire.jpg"><img src="shots/fbx-wire.jpg" width="1440" height="900" alt="FBX spider model in wireframe" loading="lazy"></a><figcaption><b>FBX</b> · wireframe (W)</figcaption></figure>
     </div>
@@ -156,7 +157,7 @@
       <div class="fmt"><h3>Video &amp; audio</h3><p>Everything mpv plays: mkv, mp4, HEVC, AV1, ProRes, webm, gif, mp3, flac… with hardware decoding.</p></div>
       <div class="fmt"><h3>Image sequences</h3><p><code>shot.1001.exr</code>, <code>plate_0001.dpx</code>… play as a clip with real frame numbers.</p></div>
       <div class="fmt"><h3>3D models</h3><p>obj, fbx, gltf/glb, stl, ply, dae, blend, 3ds, Quake md2/md3/mdl, Doom 3 md5 and more.</p></div>
-      <div class="fmt"><h3>3D animation</h3><p>Alembic, USD (usda/usdc/usdz with references, payloads, variants, instancing) and FBX skeletons.</p></div>
+      <div class="fmt"><h3>3D animation</h3><p>Plays animated sequences: Alembic, USD (usda/usdc/usdz with references, payloads, variants, instancing) and FBX skeletons.</p></div>
       <div class="fmt"><h3>Quake 3 maps</h3><p>BSP levels straight from <code>.pk3</code>, with textures and lightmaps.</p></div>
     </div>
   </div>
@@ -189,6 +190,7 @@
         <h3>3D viewport</h3>
         <ul>
           <li>Houdini-style navigation: LMB tumble, MMB pan, RMB dolly through the scene</li>
+          <li>Plays animated Alembic, USD and FBX scenes on the same timeline as video: play, pause, scrub and step frame by frame</li>
           <li>Click to select objects, <kbd>F</kbd> flies the camera to them</li>
           <li>Wireframe, grid, textures, skeleton and hide-geometry toggles</li>
           <li>Outliner with hierarchy, visibility and solo</li>
