@@ -29,6 +29,7 @@ static class SelfTest
         var atMinus3 = ImageView.Adjust(hdr, 0, -3, 1);
         Trace.Assert(at0[2] == 255 && at0[1] == 188 && at0[0] == 0 && at0[3] == 255, "hdr at 0 EV");
         Trace.Assert(atMinus3[2] == 188, "hdr highlight recovered at -3 EV");
+        Trace.Assert(ImageView.Adjust(hdr, 0, 0, 1, raw: true)[1] == 128, "raw view shows linear 0.5 as 128");
         byte[] sdr = [10, 128, 250, 77];
         Trace.Assert(ImageView.Adjust(new Source(sdr, null, false, 1, 1), 0, 0, 1).SequenceEqual(sdr), "8-bit identity");
         // When the local test pack exists: every 3D animation format must decode to the same scene as the .usda text.

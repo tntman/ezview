@@ -12,7 +12,7 @@ class ImagePanel
 {
     public readonly Border View;
     readonly ImageView _image;
-    readonly List<TextBlock> _channels = [];
+    readonly List<TextBlock> _channels = [], _views = [];
     readonly Slider _exposure = Ui.Slider(-6, 6, 0);
     readonly Slider _gamma = Ui.Slider(0.2, 3, 1);
     readonly TextBlock _exposureValue = Value(), _gammaValue = Value();
@@ -53,6 +53,22 @@ class ImagePanel
         }
         body.Children.Add(channels);
 
+        body.Children.Add(Ui.Header("View transform"));
+        var views = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, Margin = new(20, 0) };
+        foreach (var (name, raw, tip) in new[] { ("sRGB", false, "Linear files (EXR, HDR) shown through the sRGB transfer"), ("Raw", true, "Stored values shown as they are") })
+        {
+            var chip = new TextBlock
+            {
+                Text = name, FontSize = 12.5, FontWeight = FontWeight.SemiBold, Padding = new(10, 5),
+                Cursor = new Cursor(StandardCursorType.Hand), Background = Brushes.Transparent, Tag = raw,
+            };
+            ToolTip.SetTip(chip, tip);
+            chip.PointerPressed += (_, e) => { _image.SetRaw(raw); Sync(); e.Handled = true; };
+            _views.Add(chip);
+            views.Children.Add(new Border { CornerRadius = new(6), Child = chip });
+        }
+        body.Children.Add(views);
+
         body.Children.Add(Ui.Header("Exposure"));
         body.Children.Add(Row(_exposure, _exposureValue));
         body.Children.Add(Ui.Header("Gamma"));
@@ -65,7 +81,7 @@ class ImagePanel
             Text = "Reset", Foreground = Ui.Accent, FontSize = 13, FontWeight = FontWeight.SemiBold,
             Margin = new(20, 14, 20, 0), Cursor = new Cursor(StandardCursorType.Hand),
         };
-        reset.PointerPressed += (_, e) => { _image.SetAdjust(0, 0, 1); Sync(); e.Handled = true; };
+        reset.PointerPressed += (_, e) => { _image.SetAdjust(0, 0, 1); _image.SetRaw(false); Sync(); e.Handled = true; };
         body.Children.Add(reset);
 
         body.Children.Add(Ui.Header("Pixel"));
@@ -208,11 +224,10 @@ class ImagePanel
         _exposure.Value = _image.Exposure;
         _gamma.Value = _image.Gamma;
         _updating = false;
-        for (int i = 0; i < _channels.Count; i++)
+        foreach (var (chip, on) in _channels.Select((c, i) => (c, i == _image.Channel)).Concat(_views.Select(v => (v, (bool)v.Tag! == _image.Raw))))
         {
-            bool on = i == _image.Channel;
-            _channels[i].Foreground = on ? Ui.Accent : Ui.Muted;
-            ((Border)_channels[i].Parent!).Background = on ? Ui.AccentSoft : Brushes.Transparent;
+            chip.Foreground = on ? Ui.Accent : Ui.Muted;
+            ((Border)chip.Parent!).Background = on ? Ui.AccentSoft : Brushes.Transparent;
         }
         Labels();
     }

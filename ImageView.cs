@@ -106,7 +106,8 @@ class ImageView : Control, ICustomHitTest
     public int Channel { get; private set; }      // 0 RGB, 1 R, 2 G, 3 B, 4 A, 5 luminance
     public double Exposure { get; private set; }  // stops, applied in linear light
     public double Gamma { get; private set; } = 1;
-    public bool Adjusted => Channel != 0 || Exposure != 0 || Gamma != 1;
+    public bool Raw { get; private set; }         // view transform off: linear files shown as stored (for EXRs written with sRGB values)
+    public bool Adjusted => Channel != 0 || Exposure != 0 || Gamma != 1 || Raw;
     bool _inspecting;
     public bool Inspecting                                        // pixel readout and histogram wanted (panel open)
     {
@@ -134,6 +135,12 @@ class ImageView : Control, ICustomHitTest
         _ = Rebuild();
     }
 
+    public void SetRaw(bool raw)
+    {
+        Raw = raw;
+        _ = Rebuild();
+    }
+
     async Task<bool> EnsureSource()
     {
         if (_src != null) return true;
@@ -149,13 +156,13 @@ class ImageView : Control, ICustomHitTest
     async Task Rebuild()
     {
         var id = ++_adjustId;
-        var (ch, ex, ga) = (Channel, Exposure, Gamma);
+        var (ch, ex, ga, raw) = (Channel, Exposure, Gamma, Raw);
         byte[]? bytes = null;
         if (Adjusted)
         {
             if (!await EnsureSource() || id != _adjustId) return;
             var src = _src!;
-            bytes = await Task.Run(() => Adjust(src, ch, ex, ga));
+            bytes = await Task.Run(() => Adjust(src, ch, ex, ga, raw));
             if (id != _adjustId) return;
             _shown?.Dispose();
             _shown = ToBitmap(bytes, src.W, src.H);
@@ -174,7 +181,7 @@ class ImageView : Control, ICustomHitTest
 
         if (!CompareActive) { DropCompare(); return; }
         var b = _b!;
-        var bBytes = Adjusted ? await Task.Run(() => Adjust(b, ch, ex, ga)) : b.Bgra;
+        var bBytes = Adjusted ? await Task.Run(() => Adjust(b, ch, ex, ga, raw)) : b.Bgra;
         if (id != _adjustId) return;
         DropCompare();
         _bShown = ToBitmap(bBytes, b.W, b.H);
@@ -195,7 +202,8 @@ class ImageView : Control, ICustomHitTest
     static float ToSrgb(float l) => l <= 0.0031308f ? l * 12.92f : 1.055f * MathF.Pow(l, 1 / 2.4f) - 0.055f;
 
     // Display bytes (BGRA) for a source with a channel view, exposure (stops, linear light) and display gamma.
-    internal static unsafe byte[] Adjust(Source s, int channel, double exposure, double gamma)
+    // raw: no linear -> sRGB view transform, stored values are shown as they are.
+    internal static unsafe byte[] Adjust(Source s, int channel, double exposure, double gamma, bool raw = false)
     {
         var dst = new byte[s.W * s.H * 4];
         float gain = (float)Math.Pow(2, exposure), invGamma = (float)(1 / gamma);
@@ -232,7 +240,7 @@ class ImageView : Control, ICustomHitTest
         var enc = new byte[N];
         for (int i = 0; i < N; i++) enc[i] = (byte)Math.Round(MathF.Pow(ToSrgb(i / (float)(N - 1)), invGamma) * 255);
         var f = s.Rgba;
-        bool linear = s.Linear;
+        bool linear = s.Linear && !raw;
         Parallel.For(0, s.H, y =>
         {
             float L(float v) => (linear ? v : ToLinear(Math.Max(0, v))) * gain;
