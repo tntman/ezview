@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <g transform="translate(64 64) scale(1.35) translate(-64 -64)">
+  <path d="M64 18 L104 41 L64 64 L24 41Z" fill="#D85A30"/>
+  <g transform="matrix(.4,.23,0,.46,24,41)">
+    <rect width="100" height="100" fill="#444441"/>
+    <path d="M10 84 L40 44 L58 66 L70 54 L90 84Z" fill="#F1EFE8"/>
+    <circle cx="68" cy="28" r="10" fill="#D85A30"/>
+  </g>
+  <g transform="matrix(.4,-.23,0,.46,64,64)">
+    <rect width="100" height="100" fill="#2C2C2A"/>
+    <path d="M34 26 L74 50 L34 74Z" fill="#D85A30"/>
+  </g>
+  <path d="M64 27 L77 34.5 L64 42 L51 34.5Z" fill="#F1EFE8"/>
+  <path d="M51 34.5 L64 42 L64 56 L51 48.5Z" fill="#D3D1C7"/>
+  <path d="M77 34.5 L64 42 L64 56 L77 48.5Z" fill="#B4B2A9"/>
+  </g>
+</svg>

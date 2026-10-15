@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ezview</title>
+<meta name="description" content="A fast, minimal media viewer for Windows: images, video, image sequences and 3D scenes in one clean, dark window.">
+<link rel="icon" href="ezview.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Nunito+Sans:opsz,wght@6..12,400;6..12,600;6..12,800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0f0f0f; --surface: #141414; --panel: #181818; --edge: #ffffff1c;
+    --text: #e6e6e6; --muted: #8a8a8a; --accent: #ff5b2e; --accent-soft: #ff5b2e26;
+    --mono: "JetBrains Mono", ui-monospace, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.6 "Nunito Sans", system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+  a { color: inherit; }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 16px; }
+  code, kbd { font-family: var(--mono); font-size: .86em; }
+  kbd { display: inline-block; min-width: 1.9em; padding: .1em .45em; text-align: center; border: 1px solid var(--edge); border-bottom-width: 2px; border-radius: 5px; background: var(--surface); color: var(--text); }
+
+  nav { position: sticky; top: 0; z-index: 5; backdrop-filter: blur(14px); background: #0c0c0ccc; border-bottom: 1px solid var(--edge); }
+  nav .wrap { display: flex; align-items: center; gap: 24px; height: 56px; }
+  nav .brand { display: flex; align-items: center; gap: 10px; font-weight: 800; text-decoration: none; }
+  nav .brand img { width: 26px; height: 26px; }
+  nav .links { margin-left: auto; display: flex; gap: 22px; font-size: 14px; color: var(--muted); }
+  nav .links a { text-decoration: none; } nav .links a:hover { color: var(--text); }
+
+  header { padding: 96px 0 72px; position: relative; overflow: hidden; }
+  header::before { content: ""; position: absolute; inset: -40% -20% auto auto; width: 720px; height: 720px; background: radial-gradient(closest-side, #ff5b2e22, transparent); pointer-events: none; }
+  header .wrap { display: grid; grid-template-columns: 1.2fr .8fr; gap: 48px; align-items: center; }
+  h1 { font-size: clamp(42px, 7vw, 76px); line-height: 1; letter-spacing: -.03em; margin: 0 0 20px; font-weight: 800; }
+  h1 span { color: var(--accent); }
+  .lede { font-size: 20px; color: #bdbdbd; max-width: 34ch; margin: 0 0 32px; }
+  .cta { display: flex; flex-wrap: wrap; gap: 12px; }
+  .btn { display: inline-flex; align-items: center; gap: 8px; padding: 12px 20px; border-radius: 10px; font-weight: 700; text-decoration: none; border: 1px solid var(--edge); transition: transform .15s, background .15s; }
+  .btn:hover { transform: translateY(-1px); background: #ffffff0d; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #140700; }
+  .btn.primary:hover { background: #ff7048; }
+  .hero-logo { width: 100%; max-width: 340px; justify-self: center; filter: drop-shadow(0 30px 60px #ff5b2e33); }
+  .stack { margin-top: 28px; font-size: 13px; color: var(--muted); }
+
+  section { padding: 72px 0; border-top: 1px solid var(--edge); }
+  h2 { font-size: clamp(28px, 4vw, 38px); letter-spacing: -.02em; margin: 0 0 8px; }
+  .sub { color: var(--muted); margin: 0 0 40px; max-width: 60ch; }
+
+  .formats { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; }
+  .fmt { background: var(--surface); border: 1px solid var(--edge); border-radius: 14px; padding: 22px; }
+  .fmt h3 { margin: 0 0 6px; font-size: 17px; display: flex; align-items: center; gap: 10px; }
+  .fmt h3::before { content: ""; width: 8px; height: 8px; border-radius: 2px; background: var(--accent); }
+  .fmt p { margin: 0; color: var(--muted); font-size: 14px; }
+  .fmt code { color: #cfcfcf; }
+
+  .features { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 40px 48px; }
+  .feature h3 { font-size: 18px; margin: 0 0 12px; color: var(--accent); }
+  .feature ul { margin: 0; padding: 0; list-style: none; }
+  .feature li { padding: 7px 0 7px 18px; position: relative; color: #c8c8c8; font-size: 15px; border-bottom: 1px solid #ffffff0a; }
+  .feature li::before { content: ""; position: absolute; left: 0; top: 16px; width: 6px; height: 1px; background: var(--muted); }
+
+  table { width: 100%; border-collapse: collapse; font-size: 15px; }
+  td { padding: 10px 12px; border-bottom: 1px solid var(--edge); vertical-align: top; }
+  td:first-child { white-space: nowrap; width: 1%; padding-left: 0; }
+  td:last-child { color: #c8c8c8; }
+  .keys-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 48px; }
+
+  pre { margin: 0 0 18px; padding: 18px 20px; background: var(--surface); border: 1px solid var(--edge); border-radius: 12px; overflow-x: auto; font: 14px/1.7 var(--mono); }
+  pre .c { color: var(--muted); }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 48px; }
+  .two p { color: #c8c8c8; }
+
+  footer { padding: 40px 0 60px; border-top: 1px solid var(--edge); color: var(--muted); font-size: 14px; }
+  footer .wrap { display: flex; flex-wrap: wrap; gap: 12px; justify-content: space-between; }
+
+  @media (max-width: 760px) {
+    header { padding: 56px 0 48px; }
+    header .wrap, .two, .keys-grid { grid-template-columns: 1fr; gap: 32px; }
+    .hero-logo { max-width: 200px; order: -1; justify-self: start; }
+    nav .links a:not(.gh) { display: none; }
+    td:first-child { white-space: normal; }
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <a class="brand" href="#"><img src="ezview.svg" alt="">ezview</a>
+    <div class="links">
+      <a href="#formats">Formats</a>
+      <a href="#features">Features</a>
+      <a href="#keys">Keys</a>
+      <a href="#build">Build</a>
+      <a class="gh" href="https://github.com/tntman/ezview">GitHub</a>
+    </div>
+  </div>
+</nav>
+
+<header>
+  <div class="wrap">
+    <div>
+      <h1>One viewer.<br><span>Every pixel.</span></h1>
+      <p class="lede">A fast, minimal media viewer for Windows. Images, video, image sequences and 3D scenes in one clean, dark window.</p>
+      <div class="cta">
+        <a class="btn primary" href="https://github.com/tntman/ezview">View on GitHub</a>
+        <a class="btn" href="#build">Build it</a>
+      </div>
+      <p class="stack">C# / .NET 9 · Avalonia · libmpv · ImageMagick · Assimp · own Alembic, USD and Quake 3 readers</p>
+    </div>
+    <img class="hero-logo" src="ezview.svg" alt="ezview logo">
+  </div>
+</header>
+
+<section id="formats">
+  <div class="wrap">
+    <h2>Opens almost anything</h2>
+    <p class="sub">Double-click a file and it's just there. The rest of its folder becomes the queue.</p>
+    <div class="formats">
+      <div class="fmt"><h3>Images</h3><p>jpg, png, webp, heic, avif, jxl, tiff, psd, exr, hdr, dds, tga, svg, camera RAW and 200+ more via ImageMagick.</p></div>
+      <div class="fmt"><h3>Video &amp; audio</h3><p>Everything mpv plays: mkv, mp4, HEVC, AV1, ProRes, webm, gif, mp3, flac… with hardware decoding.</p></div>
+      <div class="fmt"><h3>Image sequences</h3><p><code>shot.1001.exr</code>, <code>plate_0001.dpx</code>… play as a clip with real frame numbers.</p></div>
+      <div class="fmt"><h3>3D models</h3><p>obj, fbx, gltf/glb, stl, ply, dae, blend, 3ds, Quake md2/md3/mdl, Doom 3 md5 and more.</p></div>
+      <div class="fmt"><h3>3D animation</h3><p>Alembic, USD (usda/usdc/usdz with references, payloads, variants, instancing) and FBX skeletons.</p></div>
+      <div class="fmt"><h3>Quake 3 maps</h3><p>BSP levels straight from <code>.pk3</code>, with textures and lightmaps.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="features">
+  <div class="wrap">
+    <h2>Features</h2>
+    <p class="sub">Out of the way when you're looking, right there when you need it.</p>
+    <div class="features">
+      <div class="feature">
+        <h3>Window &amp; playback</h3>
+        <ul>
+          <li>Chromeless dark window with a frosted top bar and player bar that fade out while you watch</li>
+          <li>Timeline with real frame numbers, frame stepping with <kbd>←</kbd> <kbd>→</kbd></li>
+          <li>Loop off / file / queue, play-queue toggle, volume and speed control</li>
+          <li>Double-click for fullscreen</li>
+        </ul>
+      </div>
+      <div class="feature">
+        <h3>Image inspection</h3>
+        <ul>
+          <li>View RGB, single R / G / B, alpha or luminance</li>
+          <li>Exposure from −6 to +6 EV and gamma 0.2–3</li>
+          <li>Pixel readout: exact RGBA, hex and float under the pointer</li>
+          <li>Adjustments carry over to the next image for comparison</li>
+        </ul>
+      </div>
+      <div class="feature">
+        <h3>3D viewport</h3>
+        <ul>
+          <li>Houdini-style navigation: LMB tumble, MMB pan, RMB dolly through the scene</li>
+          <li>Click to select objects, <kbd>F</kbd> flies the camera to them</li>
+          <li>Wireframe, grid, textures, skeleton and hide-geometry toggles</li>
+          <li>Outliner with hierarchy, visibility and solo</li>
+        </ul>
+      </div>
+      <div class="feature">
+        <h3>Panels</h3>
+        <ul>
+          <li>Queue panel for the current folder or sequence</li>
+          <li>Info panel with full metadata and EXIF</li>
+          <li>Side panels resize by dragging their inner edge</li>
+          <li>Everything also reachable from the right-click menu</li>
+        </ul>
+      </div>
+      <div class="feature">
+        <h3>Windows integration</h3>
+        <ul>
+          <li><code>ezview --register</code> adds it to "Open with" for every supported type</li>
+          <li><code>--unregister</code> removes it cleanly</li>
+          <li>Built-in self test for sequence grouping and 3D formats</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="keys">
+  <div class="wrap">
+    <h2>Keyboard first</h2>
+    <p class="sub">Everything has a key.</p>
+    <div class="keys-grid">
+      <table>
+        <tr><td><kbd>←</kbd> <kbd>→</kbd></td><td>Previous / next file, or one frame back / forward</td></tr>
+        <tr><td><kbd>Shift</kbd>+<kbd>←</kbd> <kbd>→</kbd>, <kbd>J</kbd> <kbd>L</kbd>, <kbd>Ctrl</kbd>+<kbd>←</kbd> <kbd>→</kbd></td><td>Jump 5 s, 10 s, 60 s</td></tr>
+        <tr><td><kbd>Space</kbd> <kbd>K</kbd></td><td>Play / pause</td></tr>
+        <tr><td><kbd>0</kbd>–<kbd>9</kbd></td><td>Jump to 0–90 % (video)</td></tr>
+        <tr><td><kbd>[</kbd> <kbd>]</kbd> <kbd>Backspace</kbd></td><td>Slower / faster / normal speed</td></tr>
+        <tr><td><kbd>PgUp</kbd> <kbd>PgDn</kbd></td><td>Previous / next file</td></tr>
+        <tr><td><kbd>R</kbd></td><td>Loop mode</td></tr>
+      </table>
+      <table>
+        <tr><td><kbd>Q</kbd> <kbd>I</kbd> <kbd>O</kbd></td><td>Queue / info / outliner</td></tr>
+        <tr><td><kbd>E</kbd></td><td>Image inspection panel</td></tr>
+        <tr><td><kbd>F</kbd></td><td>Fullscreen; in 3D, frame selection (<kbd>F11</kbd> for fullscreen)</td></tr>
+        <tr><td><kbd>W</kbd> <kbd>G</kbd> <kbd>T</kbd> <kbd>B</kbd> <kbd>M</kbd></td><td>Wireframe / grid / textures / skeleton / geometry</td></tr>
+        <tr><td><kbd>0</kbd> <kbd>H</kbd></td><td>Fit / reset view</td></tr>
+        <tr><td><kbd>Esc</kbd></td><td>Clear selection</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section id="build">
+  <div class="wrap two">
+    <div>
+      <h2>Build</h2>
+      <p>Needs the .NET 9 SDK. Video also needs <strong>libmpv</strong> (~120 MB, not in the repo): grab an <code>mpv-dev-x86_64-*.7z</code> from <a href="https://github.com/shinchiro/mpv-winbuild-cmake/releases">shinchiro/mpv-winbuild-cmake</a> and put <code>libmpv-2.dll</code> in <code>native/</code> next to <code>ezview.csproj</code>.</p>
+    </div>
+    <div>
+<pre><span class="c"># clone and build</span>
+git clone https://github.com/tntman/ezview
+cd ezview
+dotnet build
+
+<span class="c"># release build</span>
+dotnet publish -c Release -o publish</pre>
+<pre><span class="c"># command line</span>
+ezview &lt;file&gt;
+ezview --register
+ezview --unregister
+ezview --selftest</pre>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <span>ezview · built on libmpv, ImageMagick and Assimp</span>
+    <a href="https://github.com/tntman/ezview">github.com/tntman/ezview</a>
+  </div>
+</footer>
+
+</body>
+</html>
