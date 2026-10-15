@@ -80,6 +80,8 @@
 
   .gallery { display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; }
   .gallery figure { margin: 0; }
+  .credits { margin: 24px 0 0; font-size: 13px; color: var(--muted); }
+  .credits a { color: inherit; }
   .gallery figure:first-child, .gallery figure:last-child:nth-child(even) { grid-column: 1 / -1; }
   .gallery a { display: block; border-radius: 12px; overflow: hidden; border: 1px solid var(--edge); box-shadow: 0 20px 50px #0008; transition: transform .2s, border-color .2s; }
   .gallery a:hover { transform: translateY(-2px); border-color: #ff5b2e66; }
@@ -146,16 +148,19 @@
     <h2>See it</h2>
     <p class="sub">The same window for every kind of file.</p>
     <div class="gallery">
-      <figure><a href="shots/usd-outliner.jpg"><img src="shots/usd-outliner.jpg" width="1440" height="900" alt="Pixar Kitchen Set USD scene with the outliner open"></a><figcaption><b>USD</b> · Pixar's Kitchen Set with the outliner</figcaption></figure>
-      <figure><a href="shots/exr-inspect.jpg"><img src="shots/exr-inspect.jpg" width="1440" height="900" alt="EXR image with the inspection panel and pixel loupe" loading="lazy"></a><figcaption><b>EXR</b> · channels, exposure, gamma and pixel readout</figcaption></figure>
-      <figure><a href="shots/photo-info.jpg"><img src="shots/photo-info.jpg" width="1440" height="900" alt="JPEG photo with the info panel showing metadata and EXIF" loading="lazy"></a><figcaption><b>JPEG</b> · info panel with metadata and EXIF</figcaption></figure>
-      <figure><a href="shots/video.jpg"><img src="shots/video.jpg" width="1440" height="900" alt="AV1 video playing with the player bar" loading="lazy"></a><figcaption><b>AV1 / MKV</b> · player bar with frame counter</figcaption></figure>
+      <figure><a href="shots/video.jpg"><img src="shots/video.jpg" width="1440" height="900" alt="The Blender open movie Spring playing in ezview with the player bar"></a><figcaption><b>WebM</b> · <i>Spring</i> playing, with the frame counter</figcaption></figure>
+      <figure><a href="shots/exr-inspect.jpg"><img src="shots/exr-inspect.jpg" width="1440" height="900" alt="HDR EXR render shown at minus 3.3 EV with float pixel values, histogram and loupe" loading="lazy"></a><figcaption><b>EXR / HDR</b> · −3.3 EV brings the highlights back; float readout, histogram and loupe</figcaption></figure>
+      <figure><a href="shots/compare.jpg"><img src="shots/compare.jpg" width="1440" height="900" alt="Two color grades of a film frame compared with a wipe line" loading="lazy"></a><figcaption><b>Compare</b> · wipe between two versions (B pins one, C switches mode, Tab flips)</figcaption></figure>
+      <figure><a href="shots/gallery.jpg"><img src="shots/gallery.jpg" width="1440" height="900" alt="Gallery view with thumbnails of images, video, an image sequence and 3D models" loading="lazy"></a><figcaption><b>Gallery</b> · the whole folder as thumbnails, video and 3D included (G)</figcaption></figure>
+      <figure><a href="shots/usd-outliner.jpg"><img src="shots/usd-outliner.jpg" width="1440" height="900" alt="Pixar Kitchen Set USD scene with the outliner open" loading="lazy"></a><figcaption><b>USD</b> · Pixar's Kitchen Set with the outliner</figcaption></figure>
+      <figure><a href="shots/photo-info.jpg"><img src="shots/photo-info.jpg" width="1440" height="900" alt="Image with the info panel showing file and image metadata" loading="lazy"></a><figcaption><b>JPEG</b> · info panel with file and image metadata</figcaption></figure>
       <figure><a href="shots/sequence.jpg"><img src="shots/sequence.jpg" width="1440" height="900" alt="EXR image sequence playing as a clip with frame numbers" loading="lazy"></a><figcaption><b>Image sequence</b> · shot.[1001–1048].exr as one clip</figcaption></figure>
       <figure><a href="shots/usd-walk.jpg"><img src="shots/usd-walk.jpg" width="1440" height="900" alt="Skinned USD character walking with the skeleton shown" loading="lazy"></a><figcaption><b>UsdSkel</b> · skinned character walk cycle with skeleton (B)</figcaption></figure>
       <figure><a href="shots/anim-abc.jpg"><img src="shots/anim-abc.jpg" width="1440" height="900" alt="Animated Alembic scene playing with the timeline" loading="lazy"></a><figcaption><b>Alembic</b> · animated 3D scene on a timeline, frame by frame</figcaption></figure>
       <figure><a href="shots/context-menu.jpg"><img src="shots/context-menu.jpg" width="1440" height="900" alt="Right-click menu over a textured glTF model" loading="lazy"></a><figcaption><b>Right-click menu</b> · every action and its shortcut, here on a glTF model</figcaption></figure>
       <figure><a href="shots/fbx-wire.jpg"><img src="shots/fbx-wire.jpg" width="1440" height="900" alt="FBX spider model in wireframe" loading="lazy"></a><figcaption><b>FBX</b> · wireframe (W)</figcaption></figure>
     </div>
+    <p class="credits">Film frames from <i>Spring</i> © Blender Foundation | <a href="https://studio.blender.org/films/spring/">studio.blender.org/films/spring</a>, <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>; the compare shot shows a color-graded copy. <i>Damaged Helmet</i> by theblueturtle_, CC BY 4.0. The HDR spheres were rendered for this page.</p>
   </div>
 </section>
 
