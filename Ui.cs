@@ -46,15 +46,48 @@ static class Ui
             HorizontalContentAlignment = HorizontalAlignment.Center, VerticalContentAlignment = VerticalAlignment.Center,
             Margin = new(0, 12, 12, 0),
         };
+        // Grip along the inner edge: drag to resize the panel.
+        var grip = new Border
+        {
+            Width = 6, Background = Brushes.Transparent, Cursor = new Avalonia.Input.Cursor(Avalonia.Input.StandardCursorType.SizeWestEast),
+            HorizontalAlignment = left ? HorizontalAlignment.Right : HorizontalAlignment.Left,
+        };
         var panel = new Border
         {
             Width = 290, Background = Panel, BorderBrush = Edge, BorderThickness = new(1), CornerRadius = new(14),
             ClipToBounds = true,
             BoxShadow = BoxShadows.Parse("0 8 32 0 #80000000"),
             HorizontalAlignment = left ? HorizontalAlignment.Left : HorizontalAlignment.Right,
-            IsVisible = false, Child = new Avalonia.Controls.Panel { Children = { content, close } },
+            IsVisible = false, Child = new Avalonia.Controls.Panel { Children = { content, close, grip } },
         };
         close.Click += (_, _) => panel.IsVisible = false;
+
+        double startX = 0, startWidth = 0;
+        bool dragging = false;
+        grip.PointerEntered += (_, _) => grip.Background = Hover;
+        grip.PointerExited += (_, _) => { if (!dragging) grip.Background = Brushes.Transparent; };
+        grip.PointerPressed += (_, e) =>
+        {
+            if (panel.Parent is not Visual host) return;
+            dragging = true;
+            startX = e.GetPosition(host).X;
+            startWidth = panel.Width;
+            e.Pointer.Capture(grip);
+            e.Handled = true;
+        };
+        grip.PointerMoved += (_, e) =>
+        {
+            if (!dragging || panel.Parent is not Visual host) return;
+            var dx = e.GetPosition(host).X - startX;
+            panel.Width = Math.Clamp(startWidth + (left ? dx : -dx), 220, 800);
+        };
+        grip.PointerReleased += (_, e) =>
+        {
+            dragging = false;
+            grip.Background = Brushes.Transparent;
+            e.Pointer.Capture(null);
+            e.Handled = true;
+        };
         return panel;
     }
 }
