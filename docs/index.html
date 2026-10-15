@@ -35,7 +35,10 @@
   header .wrap { display: grid; grid-template-columns: 1.2fr .8fr; gap: 48px; align-items: center; }
   h1 { font-size: clamp(42px, 7vw, 76px); line-height: 1; letter-spacing: -.03em; margin: 0 0 20px; font-weight: 800; }
   h1 span { color: var(--accent); }
-  .lede { font-size: 20px; color: #bdbdbd; max-width: 34ch; margin: 0 0 32px; }
+  .lede { font-size: 20px; color: #bdbdbd; max-width: 34ch; margin: 0 0 14px; }
+  .lede strong { color: var(--text); font-weight: 800; background: linear-gradient(transparent 62%, #ff5b2e55 62%); }
+  .count { margin: 0 0 32px; font-size: 14px; color: var(--muted); }
+  .count b { color: var(--accent); font-size: 18px; font-weight: 800; }
   .cta { display: flex; flex-wrap: wrap; gap: 12px; }
   .btn { display: inline-flex; align-items: center; gap: 8px; padding: 12px 20px; border-radius: 10px; font-weight: 700; text-decoration: none; border: 1px solid var(--edge); transition: transform .15s, background .15s; }
   .btn:hover { transform: translateY(-1px); background: #ffffff0d; }
@@ -119,8 +122,9 @@
 <header>
   <div class="wrap">
     <div>
-      <h1>One viewer.<br><span>Every pixel.</span></h1>
-      <p class="lede">A fast, minimal media viewer for Windows. Images, video, image sequences and 3D scenes in one clean, dark interface.</p>
+      <h1>One viewer<br><span>Every format</span></h1>
+      <p class="lede">A fast, minimal media viewer for Windows. <strong>Images, video, image sequences and 3D scenes</strong> in one clean, dark interface.</p>
+      <p class="count"><b>119</b> file types out of the box · 46 image · 30 video &amp; audio · 43 3D</p>
       <div class="cta">
         <a class="btn primary" href="https://github.com/tntman/ezview/releases/latest/download/ezview-win-x64.zip">Download for Windows</a>
         <a class="btn" href="https://github.com/tntman/ezview">View on GitHub</a>
