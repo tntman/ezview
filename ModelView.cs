@@ -44,7 +44,7 @@ partial class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
         """;
     const string Fs = """
         in vec3 vp; in vec3 vn; in vec2 vt; in vec2 vlm;
-        uniform sampler2D tex; uniform sampler2D lm; uniform vec4 col; uniform vec3 eye; uniform int unlit; uniform int useLm; uniform int hl;
+        uniform sampler2D tex; uniform sampler2D lm; uniform vec4 col; uniform vec3 eye; uniform int unlit; uniform int useLm; uniform int hl; uniform int faceted;
         out vec4 o;
         void main() {
             if (unlit == 1) { o = col; return; }  // wireframe lines and grid
@@ -58,7 +58,12 @@ partial class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
                 l /= max(1.0, max(l.r, max(l.g, l.b)));
                 c.rgb *= l;
             }
-            else c.rgb *= 0.3 + 0.7 * abs(dot(normalize(vn), normalize(eye - vp)));  // headlight, two-sided
+            else
+            {
+                // Flat shading takes the face normal from screen-space derivatives, so no mesh rebuild is needed.
+                vec3 nn = faceted == 1 ? cross(dFdx(vp), dFdy(vp)) : vn;
+                c.rgb *= 0.3 + 0.7 * abs(dot(normalize(nn), normalize(eye - vp)));  // headlight, two-sided
+            }
             if (hl == 1) c.rgb = mix(c.rgb, vec3(1.0, 0.36, 0.18), 0.35);       // selected: accent tint
             o = vec4(c.rgb, 1.0);
         }
@@ -73,8 +78,12 @@ partial class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
     int _gridCount;
     bool _gridDirty;
 
-    // View toggles (W / G / T).
+    // View toggles (W / Shift+W / N / G / T).
     public bool Wireframe { get; private set; }
+    public bool WireOnShaded { get; private set; }
+    public bool Flat { get; private set; }
+    public void ToggleWireOnShaded() { WireOnShaded = !WireOnShaded; RequestNextFrameRendering(); }
+    public void ToggleFlat() { Flat = !Flat; RequestNextFrameRendering(); }
     public bool ShowGrid { get; private set; }
     public bool Textures { get; private set; } = true;
     public void ToggleWireframe() { Wireframe = !Wireframe; RequestNextFrameRendering(); }
@@ -1026,6 +1035,7 @@ partial class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
         gl.Uniform1(useLmLoc, 0);
         var hlLoc = gl.GetUniformLocation(_prog, "hl");
         gl.Uniform1(hlLoc, 0);
+        gl.Uniform1(gl.GetUniformLocation(_prog, "faceted"), Flat ? 1 : 0);
         gl.ActiveTexture(TextureUnit.Texture0);
 
         if (_pickAt is { } pick)
@@ -1087,6 +1097,8 @@ partial class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
         }
         else
         {
+            // Wire on shaded: push the faces back a little so the edges drawn after them win the depth test.
+            if (WireOnShaded) { gl.Enable(EnableCap.PolygonOffsetFill); gl.PolygonOffset(1, 1); }
             gl.Uniform1(unlitLoc, 0);
             for (int i = 0; i < _gpu.Count; i++)
             {
@@ -1101,6 +1113,20 @@ partial class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
                 gl.Uniform4(colLoc, c.X, c.Y, c.Z, c.W);
                 gl.BindVertexArray(g.Vao);
                 gl.DrawElementsInstanced(PrimitiveType.Triangles, (uint)g.Part.Idx.Length, DrawElementsType.UnsignedInt, null, (uint)g.Part.Inst.Length);
+            }
+            if (WireOnShaded)
+            {
+                gl.Disable(EnableCap.PolygonOffsetFill);
+                gl.Uniform1(unlitLoc, 1);
+                gl.Uniform4(colLoc, 0.08f, 0.08f, 0.08f, 1f);
+                for (int i = 0; i < _gpu.Count; i++)
+                {
+                    var g = _gpu[i];
+                    if (!Shown(i)) continue;
+                    if (g.LineVao == 0) BuildLines(gl, g);
+                    gl.BindVertexArray(g.LineVao);
+                    gl.DrawElementsInstanced(PrimitiveType.Lines, (uint)g.LineCount, DrawElementsType.UnsignedInt, null, (uint)g.Part.Inst.Length);
+                }
             }
         }
         gl.Uniform1(hlLoc, 0);

@@ -268,7 +268,8 @@ class MainWindow : Window
             ("3D", [
                 ("LMB  MMB  RMB", "Tumble / pan / dolly"),
                 ("F  H", "Frame selection / reset view"),
-                ("W  G  T", "Wireframe / grid / textures"),
+                ("W  Shift+W", "Wireframe / wire on shaded"),
+                ("N  G  T", "Flat shading / grid / textures"),
                 ("B  M", "Skeleton / geometry"),
                 ("O  Esc", "Outliner / clear selection"),
                 ("Space", "Play / pause (when not navigating)"),
@@ -601,7 +602,9 @@ class MainWindow : Window
             case Key.OemMinus or Key.Subtract when _kind == Kind.Image: _image.ZoomBy(1 / 1.25); break;
             case Key.M when _kind == Kind.Model: _model!.ToggleGeometry(); break;
             case Key.O when !ctrl && _kind == Kind.Model: TogglePanel(_outliner.View); break;
+            case Key.W when shift && _kind == Kind.Model: _model!.ToggleWireOnShaded(); break;
             case Key.W when _kind == Kind.Model: _model!.ToggleWireframe(); break;
+            case Key.N when _kind == Kind.Model: _model!.ToggleFlat(); break;
             case Key.G when _kind == Kind.Model: _model!.ToggleGrid(); break;
             case Key.G when _queue.Count > 0: ShowGallery(); break;
             case Key.T when _kind == Kind.Model: _model!.ToggleTextures(); break;
@@ -727,6 +730,8 @@ class MainWindow : Window
             items.Add(Item("\uE8FD", "Outliner", () => TogglePanel(_outliner.View), "O", _outliner.View.IsVisible));
             if (_model!.IsAnimated) items.Add(Item(_model.Paused ? "" : "", _model.Paused ? "Play" : "Pause", _model.TogglePause, "Space"));
             items.Add(Item("", "Wireframe", _model!.ToggleWireframe, "W", _model.Wireframe));
+            items.Add(Item("", "Wire on shaded", _model.ToggleWireOnShaded, "Shift+W", _model.WireOnShaded));
+            items.Add(Item("", "Flat shading", _model.ToggleFlat, "N", _model.Flat));
             items.Add(Item("", "Grid", _model.ToggleGrid, "G", _model.ShowGrid));
             items.Add(Item("\uF158", "Geometry", _model.ToggleGeometry, "M", _model.ShowGeometry));
             if (_model.HasSkeleton) items.Add(Item("\uE805", "Skeleton", _model.ToggleSkeleton, "B", _model.ShowSkeleton));
