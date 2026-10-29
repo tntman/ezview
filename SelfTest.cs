@@ -37,6 +37,15 @@ static class SelfTest
         Trace.Assert(ImageView.Adjust(hdr, 0, 0, 1, raw: true)[1] == 128, "raw view shows linear 0.5 as 128");
         byte[] sdr = [10, 128, 250, 77];
         Trace.Assert(ImageView.Adjust(new Source(sdr, null, false, 1, 1), 0, 0, 1).SequenceEqual(sdr), "8-bit identity");
+        // The AOV reader decodes what ImageMagick writes the same way ImageMagick reads it, for each compression it handles.
+        foreach (var c in new[] { ImageMagick.CompressionMethod.NoCompression, ImageMagick.CompressionMethod.RLE, ImageMagick.CompressionMethod.ZipS, ImageMagick.CompressionMethod.Zip })
+        {
+            var f = Path.Combine(Path.GetTempPath(), "ezview-selftest.exr");
+            using (var img = new ImageMagick.MagickImage("gradient:red-blue", 37, 21)) { img.Settings.Compression = c; img.Write(f); }
+            var (mine, magick) = (Exr.Read(f, ""), ImageView.ReadFile(f, null, null));
+            Trace.Assert(mine.W == 37 && mine.H == 21 && mine.Rgba!.Zip(magick.Rgba!).All(p => Math.Abs(p.First - p.Second) < 0.002f), $"exr {c}");
+            File.Delete(f);
+        }
         // When the local test pack exists: every 3D animation format must decode to the same scene as the .usda text.
         var anim = Path.Combine(AppContext.BaseDirectory, @"..\..\..\..\testpack\3d\anim\");
         if (File.Exists(anim + "anim.usda"))

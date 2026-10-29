@@ -126,6 +126,7 @@ class ImageView : Control, ICustomHitTest
         try { (bmp, src) = await full; }
         catch when (id != _loadId) { return; }
         if (id != _loadId) { bmp.Dispose(); return; }
+        Layer = null;
         Source? b = null;
         if (_bPath != null && _bPath != path)
         {
@@ -150,6 +151,27 @@ class ImageView : Control, ICustomHitTest
         CompareChanged?.Invoke();
         if (zoomedPreview) Redraw();
         else Fit();
+    }
+
+    // AOV of a multi-layer EXR on screen (null: the image as opened). View and adjustments stay as they are.
+    public string? Layer { get; private set; }
+
+    public async Task ShowLayer(string? layer)
+    {
+        if (_path is not { } path || layer == Layer) return;
+        var id = ++_loadId;
+        var (bmp, src) = await Task.Run(() =>
+        {
+            if (layer == null) return Decode(path);
+            var s = Exr.Read(path, layer);
+            return ((Bitmap)ToBitmap(s.Bgra, s.W, s.H), (Source?)s);
+        });
+        if (id != _loadId) { bmp.Dispose(); return; }
+        Layer = layer;
+        Show(bmp, path, src);
+        ImageChanged?.Invoke();
+        if (Adjusted || Inspecting || CompareActive) _ = Rebuild();
+        Redraw();
     }
 
     static async Task<(Bitmap, Source?)> Ahead(Task<(Bitmap, Source?)?> ahead, string path) =>
@@ -460,7 +482,8 @@ class ImageView : Control, ICustomHitTest
             if (orientation is OrientationType.TopLeft or OrientationType.Undefined) return (new Bitmap(path), null);
         }
         // ponytail: whole image decoded into memory, add tiling when gigapixel images matter
-        var src = ReadFile(path, null, null);
+        // A multi-layer EXR without a main RGBA layer opens on its first AOV.
+        var src = Exr.Layers(path) is [var first, ..] && first.Layer.Length > 0 ? Exr.Read(path, first.Layer) : ReadFile(path, null, null);
         return (ToBitmap(src.Bgra, src.W, src.H), src.Rgba != null ? src : null); // 8-bit: the bitmap holds it all
     }
 

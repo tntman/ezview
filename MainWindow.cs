@@ -27,6 +27,9 @@ class MainWindow : Window
     readonly QueuePanel _queuePanel;
     readonly InfoPanel _info = new();
     readonly OutlinerPanel _outliner;
+    readonly AovPanel _aovPanel;
+    List<(string Layer, string Channels)>? _layers; // AOVs of the EXR on screen
+    string? _aov;                                   // the AOV picked, kept while stepping through files that have it
     readonly ImagePanel _imagePanel;
     readonly DispatcherTimer _hide = new() { Interval = TimeSpan.FromSeconds(1.5) };
     readonly DispatcherTimer _tick = new() { Interval = TimeSpan.FromMilliseconds(250) };
@@ -77,6 +80,7 @@ class MainWindow : Window
         _bottom.SetLoop(_loop);
         _imagePanel = new ImagePanel(_image);
         _outliner = new OutlinerPanel(() => _kind == Kind.Model ? _model : null);
+        _aovPanel = new AovPanel(l => _ = PickAov(l));
         _queuePanel = new QueuePanel(i => { _index = i; _ = ShowCurrent(); }, RemoveAt, () => AddFilesDialog());
 
         _overlay.Children.Add(_top);
@@ -86,7 +90,7 @@ class MainWindow : Window
         _host.Children.Add(_msg);
         _keysView = KeysView();
         _gallery = new Gallery(this, i => { _index = i; _ = ShowCurrent(); });
-        Content = new Panel { Children = { _host, _queuePanel.View, _outliner.View, _info.View, _imagePanel.View, _overlay, _gallery.View, _keysView } };
+        Content = new Panel { Children = { _host, _queuePanel.View, _outliner.View, _aovPanel.View, _info.View, _imagePanel.View, _overlay, _gallery.View, _keysView } };
 
         AddHandler(KeyDownEvent, OnKey, Avalonia.Interactivity.RoutingStrategies.Tunnel);
         AddHandler(KeyUpEvent, (_, e) =>
@@ -122,7 +126,7 @@ class MainWindow : Window
         }, Avalonia.Interactivity.RoutingStrategies.Tunnel, true);
         AddHandler(DoubleTappedEvent, (_, e) =>
         {
-            if (e.Source is Visual v && (v.FindAncestorOfType<Button>(true) != null || _bottom.IsPointerOver || _queuePanel.View.IsPointerOver || _outliner.View.IsPointerOver || _info.View.IsPointerOver || _imagePanel.View.IsPointerOver)) return;
+            if (e.Source is Visual v && (v.FindAncestorOfType<Button>(true) != null || _bottom.IsPointerOver || _queuePanel.View.IsPointerOver || _outliner.View.IsPointerOver || _aovPanel.View.IsPointerOver || _info.View.IsPointerOver || _imagePanel.View.IsPointerOver)) return;
             // A double-click on a gallery tile opens the file with its first click; the second must not toggle fullscreen.
             if (_keysView.IsVisible || _gallery.View.IsVisible || (DateTime.Now - _gallery.ClosedAt).TotalMilliseconds < 600) return;
             _video?.CancelClick(); // a double-click means fullscreen, never play/pause
@@ -264,6 +268,7 @@ class MainWindow : Window
                 ("R  Shift+R  Shift+F", "Rotate right / left, flip"),
                 ("B  C  Tab", "Pin as B / compare mode / flip A and B"),
                 ("Ctrl+C", "Copy picked color"),
+                ("Up  Down", "Previous / next AOV (multi-layer EXR)"),
             ]),
             ("3D", [
                 ("LMB  MMB  RMB", "Tumble / pan / dolly"),
@@ -446,6 +451,10 @@ class MainWindow : Window
             {
                 case Kind.Image:
                     await _image.Load(entry.Path);
+                    _layers = await Task.Run(() => Exr.Layers(entry.Path));
+                    if (Current != entry) return;
+                    if (_aov != null && _layers?.Any(l => l.Layer == _aov) == true) await PickAov(_aov, show: false);
+                    RefreshAovs();
                     _image.Prefetch(new[] { _index + 1, _index - 1 }
                         .Where(i => i >= 0 && i < _queue.Count && _queue[i].Kind == Kind.Image && !_queue[i].IsSequence).Select(i => _queue[i].Path));
                     break;
@@ -504,7 +513,7 @@ class MainWindow : Window
         _zoomBar.IsVisible = kind == Kind.Image;
         _bottom.SetMediaControls(kind == Kind.Video);
         if (kind != Kind.Model) _outliner.View.IsVisible = false;
-        if (kind != Kind.Image) _imagePanel.View.IsVisible = false;
+        if (kind != Kind.Image) { _imagePanel.View.IsVisible = _aovPanel.View.IsVisible = false; _layers = null; }
         _host.Background = kind == Kind.Video ? Brushes.Black : Ui.Bg;
         UpdateStrips();
     }
@@ -513,7 +522,7 @@ class MainWindow : Window
     {
         double top = _top.Height, bottom = _bottom.IsVisible ? _bottom.Height : 0, opacity = _overlay.Opacity;
         // Side panels stop above the player bar so their bottom row isn't hidden under it.
-        _queuePanel.View.Margin = _outliner.View.Margin = _info.View.Margin = _imagePanel.View.Margin = new(Ui.Gap, top + Ui.Gap, Ui.Gap, bottom + Ui.Gap);
+        _queuePanel.View.Margin = _outliner.View.Margin = _aovPanel.View.Margin = _info.View.Margin = _imagePanel.View.Margin = new(Ui.Gap, top + Ui.Gap, Ui.Gap, bottom + Ui.Gap);
         _image.SetStrips(top, bottom, opacity);
         var right = _imagePanel.View.IsVisible ? _imagePanel.View : _info.View.IsVisible ? _info.View : null;
         _image.CoveredRight = right == null ? 0 : right.Width + Ui.Gap * 2;
@@ -590,6 +599,8 @@ class MainWindow : Window
             case Key.Back when v != null: v.Command("set", "speed", "1"); break;
             case Key.Up when v != null: v.Volume(5); break;
             case Key.Down when v != null: v.Volume(-5); break;
+            case Key.Up when _layers != null: StepAov(-1); break;
+            case Key.Down when _layers != null: StepAov(1); break;
             case Key.M when v != null: v.ToggleMute(); break;
             case Key.S when v != null: v.Screenshot(); break;
             case Key.H when _kind == Kind.Model: _model!.Reset(); break;
@@ -639,9 +650,11 @@ class MainWindow : Window
     void TogglePanel(Border panel)
     {
         panel.IsVisible = !panel.IsVisible;
-        // The queue and the outliner share the left edge.
-        if (panel.IsVisible && panel == _outliner.View) _queuePanel.View.IsVisible = false;
-        if (panel.IsVisible && panel == _queuePanel.View) _outliner.View.IsVisible = false;
+        // The queue, the outliner and the AOV list share the left edge.
+        Border[] left = [_queuePanel.View, _outliner.View, _aovPanel.View];
+        if (panel.IsVisible && left.Contains(panel))
+            foreach (var p in left) p.IsVisible = p == panel;
+        if (panel == _aovPanel.View) RefreshAovs();
         // Info and image adjustments share the right edge.
         if (panel.IsVisible && panel == _imagePanel.View) { _info.View.IsVisible = false; _imagePanel.Sync(); }
         if (panel.IsVisible && panel == _info.View) _imagePanel.View.IsVisible = false;
@@ -649,6 +662,34 @@ class MainWindow : Window
         UpdateStrips(); // the loupe needs to know what the right-hand panel now covers
         if (panel == _queuePanel.View) RefreshQueue();
         else RefreshInfo();
+    }
+
+    // ---- AOVs (layers of a multi-layer EXR) ----
+
+    // The AOV asked for (ahead of the decode, so quick ↑ ↓ presses each move one step).
+    string ShownAov => _aov is { } a && _layers?.Any(l => l.Layer == a) == true ? a : _layers?[0].Layer ?? "";
+
+    // Shows an AOV and, picked by hand, opens the AOV list next to it.
+    async Task PickAov(string layer, bool show = true)
+    {
+        if (_layers == null || Current is not { } entry) return;
+        _aov = layer == _layers[0].Layer ? null : layer;
+        if (show && !_aovPanel.View.IsVisible) TogglePanel(_aovPanel.View);
+        try { await _image.ShowLayer(_aov); }
+        catch (Exception ex) when (Current == entry) { ShowMessage($"Can't show {layer}: {ex.Message}"); }
+        RefreshAovs();
+    }
+
+    void StepAov(int d)
+    {
+        if (_layers == null) return;
+        var i = _layers.FindIndex(l => l.Layer == ShownAov);
+        _ = PickAov(_layers[(i + d + _layers.Count) % _layers.Count].Layer, show: false);
+    }
+
+    void RefreshAovs()
+    {
+        if (_aovPanel.View.IsVisible) _aovPanel.Refresh(_layers, ShownAov);
     }
 
     // ---- Context menu ----
@@ -720,6 +761,8 @@ class MainWindow : Window
             items.Add(Item("\uE8AB", "Flip horizontal", _image.FlipHorizontal, "Shift+F"));
             items.Add(Item("\uE8AB", "Flip vertical", _image.FlipVertical));
             items.Add(Sub("\uE8A9", "Compare", CompareItems()));
+            if (_layers != null)
+                items.Add(Sub("\uE81E", "AOVs", _layers.Select(l => Choice(l.Layer.Length == 0 ? "RGBA" : l.Layer, () => _ = PickAov(l.Layer), l.Layer == ShownAov))));
             items.Add(Item("\uE790", "Adjust image\u2026", () => TogglePanel(_imagePanel.View), "E", _imagePanel.View.IsVisible || _image.Adjusted));
         }
         else if (_kind == Kind.Model)
@@ -933,6 +976,6 @@ class MainWindow : Window
         _overlay.Opacity = 0;
         _overlay.IsHitTestVisible = false;
         // Keep the cursor while it's over an open side panel, and while inspecting an image.
-        if (!_imagePanel.View.IsVisible && !_queuePanel.View.IsPointerOver && !_outliner.View.IsPointerOver && !_info.View.IsPointerOver && !_imagePanel.View.IsPointerOver) Cursor = new Cursor(StandardCursorType.None);
+        if (!_imagePanel.View.IsVisible && !_queuePanel.View.IsPointerOver && !_outliner.View.IsPointerOver && !_aovPanel.View.IsPointerOver && !_info.View.IsPointerOver && !_imagePanel.View.IsPointerOver) Cursor = new Cursor(StandardCursorType.None);
     }
 }

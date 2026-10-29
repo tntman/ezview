@@ -18,6 +18,7 @@ Built with C# / .NET 9 and Avalonia, on top of [libmpv](https://mpv.io), [ImageM
 
 - Chromeless dark window, frosted top bar and player bar that fade out while you watch
 - Player bar with timeline, frame numbers, loop (off / file / queue) and volume; frame stepping with , . and 5 s jumps with ← →
+- Multi-layer EXR: pick an AOV from the right-click menu, an AOV list on the left, ↑ ↓ to step through them
 - Queue panel (Q), info panel with full metadata and EXIF (I), right-click menu
 - 3D: Houdini-style navigation (LMB tumble, MMB pan, RMB dolly), wireframe (W), wire on shaded (Shift+W), flat shading (N), grid (G), textures on/off (T), skeleton (B), outliner with visibility and solo (O)
 - Can register itself for all supported file types (`ezview --register`)
