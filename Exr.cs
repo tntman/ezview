@@ -20,8 +20,8 @@ static class Exr
 
     static string Suffix(string channel) => channel[(channel.LastIndexOf('.') + 1)..];
 
-    // Layers in file order (the main layer first) with their channels ("RGBA", "XYZ", "Z"), or null when there's only
-    // one layer or the file can't be read.
+    // Layers in file order (the main layer first) with their channels ("RGBA", "XYZ", "Z"), or null when the file
+    // isn't an EXR or can't be read.
     public static List<(string Layer, string Channels)>? Layers(string path)
     {
         if (!path.EndsWith(".exr", StringComparison.OrdinalIgnoreCase)) return null;
@@ -29,7 +29,7 @@ static class Exr
         {
             var layers = ReadHeader(path).Channels.GroupBy(c => Layer(c.Name)).OrderBy(g => g.Key.Length > 0)
                 .Select(g => (g.Key, Names(g.Select(c => Suffix(c.Name))))).ToList();
-            return layers.Count > 1 ? layers : null;
+            return layers.Count > 0 ? layers : null;
         }
         catch (Exception ex) when (ex is IOException or InvalidDataException or EndOfStreamException or NotSupportedException or UnauthorizedAccessException) { return null; }
     }
