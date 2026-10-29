@@ -46,7 +46,7 @@ static class Exr
         var chans = h.Channels.Where(c => Layer(c.Name) == layer).ToList();
         if (chans.Count == 0) throw new InvalidDataException($"No layer {layer}");
         if (h.Compression is not (0 or 1 or 2 or 3))
-            throw new NotSupportedException($"{new[] { "", "", "", "", "PIZ", "PXR24", "B44", "B44A", "DWAA", "DWAB" }.ElementAtOrDefault(h.Compression)} compression isn't supported for AOVs");
+            throw new NotSupportedException($"{Compressions.ElementAtOrDefault(h.Compression)} compression isn't supported for AOVs");
         if (h.Channels.Any(c => c.XSampling != 1 || c.YSampling != 1)) throw new NotSupportedException("Subsampled EXR channels aren't supported");
 
         // Which channel goes to R, G, B, A (-1: none).
@@ -131,6 +131,95 @@ static class Exr
         var o2 = new byte[size];
         for (int i = 0, half = (size + 1) / 2; i < size; i++) o2[i] = t[(i & 1) == 0 ? i / 2 : half + i / 2];
         return o2;
+    }
+
+    static readonly string[] Compressions = ["None", "RLE", "ZIPS", "ZIP", "PIZ", "PXR24", "B44", "B44A", "DWAA", "DWAB", "HTJ2K256", "HTJ2K32"];
+
+    // Every header attribute as text, in file order (the first part's header for multi-part files), for the info panel.
+    public static List<(string, string)>? Metadata(string path)
+    {
+        if (!path.EndsWith(".exr", StringComparison.OrdinalIgnoreCase)) return null;
+        try
+        {
+            using var f = new BinaryReader(File.OpenRead(path));
+            if (f.ReadInt32() != 20000630) return null;
+            int flags = f.ReadInt32();
+            string Str()
+            {
+                var b = new List<byte>();
+                for (byte c; (c = f.ReadByte()) != 0;) b.Add(c);
+                return System.Text.Encoding.UTF8.GetString(b.ToArray());
+            }
+            static string F(float v) => v.ToString("0.#####", System.Globalization.CultureInfo.InvariantCulture);
+            string Fs(int n) => string.Join("  ", Enumerable.Range(0, n).Select(_ => F(f.ReadSingle())));
+            string Is(int n) => string.Join("  ", Enumerable.Range(0, n).Select(_ => f.ReadInt32()));
+
+            var kinds = new List<string>();
+            if ((flags & 0x200) != 0) kinds.Add("tiled");
+            if ((flags & 0x800) != 0) kinds.Add("deep");
+            if ((flags & 0x1000) != 0) kinds.Add("multi-part");
+            var rows = new List<(string, string)> { ("Version", $"{flags & 0xff}{(kinds.Count > 0 ? "  (" + string.Join(", ", kinds) + ")" : "")}") };
+            for (string name; (name = Str()).Length > 0;)
+            {
+                var type = Str();
+                int size = f.ReadInt32();
+                long end = f.BaseStream.Position + size;
+                string value = type switch
+                {
+                    "string" => System.Text.Encoding.UTF8.GetString(f.ReadBytes(size)),
+                    "stringvector" => string.Join("\n", ReadStrings(f, end)),
+                    "int" => $"{f.ReadInt32()}",
+                    "float" => F(f.ReadSingle()),
+                    "double" => f.ReadDouble().ToString("0.#######", System.Globalization.CultureInfo.InvariantCulture),
+                    "v2i" => Is(2), "v3i" => Is(3), "v2f" => Fs(2), "v3f" => Fs(3), "box2f" => Fs(4),
+                    "box2i" => Box(f.ReadInt32(), f.ReadInt32(), f.ReadInt32(), f.ReadInt32()),
+                    "m33f" => string.Join("\n", Enumerable.Range(0, 3).Select(_ => Fs(3))),
+                    "m44f" => string.Join("\n", Enumerable.Range(0, 4).Select(_ => Fs(4))),
+                    "rational" => $"{f.ReadInt32()} / {f.ReadUInt32()}",
+                    "compression" => Compressions.ElementAtOrDefault(f.ReadByte()) ?? "?",
+                    "lineOrder" => f.ReadByte() switch { 0 => "Increasing Y", 1 => "Decreasing Y", _ => "Random Y" },
+                    "envmap" => f.ReadByte() == 0 ? "Lat-long" : "Cube",
+                    "tiledesc" => $"{f.ReadUInt32()} × {f.ReadUInt32()}",
+                    "timecode" => Timecode(f.ReadUInt32()),
+                    "chromaticities" => $"R {Fs(2)}\nG {Fs(2)}\nB {Fs(2)}\nW {Fs(2)}",
+                    "preview" => $"{f.ReadUInt32()} × {f.ReadUInt32()} thumbnail",
+                    "chlist" => string.Join(", ", ReadChannels(f, Str)),
+                    _ => $"{type}, {size} bytes",
+                };
+                rows.Add((name, value));
+                f.BaseStream.Position = end;
+            }
+            return rows;
+        }
+        catch (Exception ex) when (ex is IOException or EndOfStreamException or UnauthorizedAccessException) { return null; }
+    }
+
+    static string Box(int x0, int y0, int x1, int y1) => $"{x0} {y0} – {x1} {y1}  ({x1 - x0 + 1} × {y1 - y0 + 1})";
+
+    // SMPTE time and flags: BCD hours, minutes, seconds, frames.
+    static string Timecode(uint t)
+    {
+        static uint Bcd(uint v) => (v >> 4) * 10 + (v & 15);
+        return $"{Bcd(t >> 24 & 0x3f):00}:{Bcd(t >> 16 & 0x7f):00}:{Bcd(t >> 8 & 0x7f):00}:{Bcd(t & 0x3f):00}";
+    }
+
+    static IEnumerable<string> ReadStrings(BinaryReader f, long end)
+    {
+        var list = new List<string>();
+        while (f.BaseStream.Position < end) list.Add(System.Text.Encoding.UTF8.GetString(f.ReadBytes(f.ReadInt32())));
+        return list;
+    }
+
+    static IEnumerable<string> ReadChannels(BinaryReader f, Func<string> str)
+    {
+        var list = new List<string>();
+        for (string c; (c = str()).Length > 0;)
+        {
+            int type = f.ReadInt32();
+            f.ReadBytes(12); // pLinear, reserved, sampling
+            list.Add($"{c} {(type == 1 ? "half" : type == 2 ? "float" : "uint")}");
+        }
+        return list;
     }
 
     static Header ReadHeader(string path)

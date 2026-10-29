@@ -863,6 +863,7 @@ class MainWindow : Window
         };
         if (img.Density.X > 0) rows.Add(("Resolution", $"{img.Density.X:0} × {img.Density.Y:0} {img.Density.Units}"));
         var result = new List<(string, List<(string, string)>)> { ("Image", rows) };
+        if (Exr.Metadata(path) is { } exr) result.Add(("EXR header", exr));
         if (img.GetExifProfile() is { } exif)
         {
             // The values photographers look for first, then everything else.
