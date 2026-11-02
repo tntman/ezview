@@ -664,6 +664,33 @@ class MainWindow : Window
         else RefreshInfo();
     }
 
+    // ---- Sequence as single images: its frames take its place in the queue, opened at the frame on screen ----
+
+    Entry? _expanded; // the sequence last split into images, so it can be played again
+
+    void ExpandSequence(int frame)
+    {
+        if (Current is not { IsSequence: true } seq) return;
+        var at = Math.Max(0, Array.FindIndex(seq.Frames!, f => Media.FrameNumber(f) == frame));
+        _queue.RemoveAt(_index);
+        _queue.InsertRange(_index, seq.Frames!.Select(f => new Entry(f)));
+        _expanded = seq;
+        _index += at;
+        _ = ShowCurrent();
+    }
+
+    void CollapseSequence()
+    {
+        if (_expanded is not { } seq) return;
+        var start = _queue.FindIndex(e => seq.Frames!.Contains(e.Path));
+        if (start < 0) return;
+        _queue.RemoveAll(e => !e.IsSequence && seq.Frames!.Contains(e.Path));
+        _queue.Insert(start, seq);
+        _index = start;
+        _expanded = null;
+        _ = ShowCurrent();
+    }
+
     // ---- AOVs (layers of a multi-layer EXR) ----
 
     // The AOV asked for (ahead of the decode, so quick ↑ ↓ presses each move one step).
@@ -740,6 +767,7 @@ class MainWindow : Window
             if (entry?.IsSequence == true)
                 items.Add(Sub("", "Frame rate", new[] { 23.976, 24, 25, 30, 48, 60 }.Select(f =>
                     Choice($"{f:0.###} fps", () => { _seqFps = f; _ = ShowCurrent(); }, Math.Abs(_seqFps - f) < 0.001))));
+            if (entry?.IsSequence == true) items.Add(Item("", "View as single images", () => ExpandSequence(v.Frame)));
             var tracks = v.Tracks();
             foreach (var (type, prop, title, glyph) in new[] { ("audio", "aid", "Audio track", ""), ("sub", "sid", "Subtitles", "") })
             {
@@ -761,6 +789,7 @@ class MainWindow : Window
             items.Add(Item("\uE8AB", "Flip horizontal", _image.FlipHorizontal, "Shift+F"));
             items.Add(Item("\uE8AB", "Flip vertical", _image.FlipVertical));
             items.Add(Sub("\uE8A9", "Compare", CompareItems()));
+            if (_expanded != null && entry != null && _expanded.Frames!.Contains(entry.Path)) items.Add(Item("\uE714", "Play as sequence", CollapseSequence));
             if (_layers != null)
                 items.Add(Sub("\uE81E", "AOVs", _layers.Select(l => Choice(l.Layer.Length == 0 ? "RGBA" : l.Layer, () => _ = PickAov(l.Layer), l.Layer == ShownAov))));
             items.Add(Item("\uE790", "Adjust image\u2026", () => TogglePanel(_imagePanel.View), "E", _imagePanel.View.IsVisible || _image.Adjusted));
