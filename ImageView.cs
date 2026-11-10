@@ -3,6 +3,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Media;
+using Avalonia.Media.Immutable;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using Avalonia.Rendering;
@@ -77,20 +78,24 @@ class ImageView : Control, ICustomHitTest
 
     // Neighbours in the queue are decoded ahead, so stepping through a folder shows the next image at once.
     // A null result: too big to decode ahead (it would sit in memory next to the current image).
-    readonly Dictionary<string, Task<(Bitmap, Source?)?>> _ahead = new(StringComparer.OrdinalIgnoreCase);
+    // Each is decoded for one AOV (null: the image as opened), like Load.
+    readonly Dictionary<string, (string? Layer, Task<(Bitmap, Source?, string?)?> Task)> _ahead = new(StringComparer.OrdinalIgnoreCase);
 
-    public void Prefetch(IEnumerable<string> paths)
+    public void Prefetch(IEnumerable<string> paths, string? layer)
     {
         var want = paths.Where(p => !string.Equals(p, _path, StringComparison.OrdinalIgnoreCase) && new FileInfo(p) is { Exists: true, Length: < 64 << 20 })
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        foreach (var (p, t) in _ahead.Where(kv => !want.Contains(kv.Key)).ToList())
+        foreach (var (p, a) in _ahead.Where(kv => !want.Contains(kv.Key) || kv.Value.Layer != layer).ToList())
         {
             _ahead.Remove(p);
-            _ = t.ContinueWith(x => { if (x.IsCompletedSuccessfully) x.Result?.Item1.Dispose(); });
+            Drop(a.Task);
         }
         foreach (var p in want)
-            if (!_ahead.ContainsKey(p)) _ahead[p] = Task.Run(() => Pixels(p) > 40_000_000 ? null : ((Bitmap, Source?)?)Decode(p));
+            if (!_ahead.ContainsKey(p)) _ahead[p] = (layer, Task.Run(() => Pixels(p) > 40_000_000 ? null : ((Bitmap, Source?, string?)?)Decode(p, layer)));
     }
+
+    static void Drop(Task<(Bitmap, Source?, string?)?> ahead) =>
+        ahead.ContinueWith(x => { if (x.IsCompletedSuccessfully) x.Result?.Item1.Dispose(); });
 
     // Width × height from the header; huge when unreadable, so nothing is decoded ahead for it.
     static long Pixels(string path)
@@ -104,10 +109,17 @@ class ImageView : Control, ICustomHitTest
         catch (MagickException) { return long.MaxValue; }
     }
 
-    public async Task Load(string path)
+    // layer: the AOV to open on when the file has it (the one kept while stepping through renders).
+    public async Task Load(string path, string? layer = null)
     {
         var id = ++_loadId;
-        var full = _ahead.Remove(path, out var ready) ? Ahead(ready, path) : Task.Run(() => Decode(path));
+        Task<(Bitmap, Source?, string?)>? full = null;
+        if (_ahead.Remove(path, out var ready))
+        {
+            if (ready.Layer == layer) full = Ahead(ready.Task, path, layer);
+            else Drop(ready.Task); // decoded for another AOV
+        }
+        full ??= Task.Run(() => Decode(path, layer));
         // Big photos: a quick screen-sized decode first, swapped for the full image when it's ready.
         double previewWidth = 0;
         if (!full.IsCompleted && await Task.Run(() => Preview(path)) is { } preview)
@@ -123,10 +135,11 @@ class ImageView : Control, ICustomHitTest
         }
         Bitmap bmp;
         Source? src;
-        try { (bmp, src) = await full; }
+        string? shown;
+        try { (bmp, src, shown) = await full; }
         catch when (id != _loadId) { return; }
         if (id != _loadId) { bmp.Dispose(); return; }
-        Layer = null;
+        Layer = shown;
         Source? b = null;
         if (_bPath != null && _bPath != path)
         {
@@ -135,7 +148,9 @@ class ImageView : Control, ICustomHitTest
             if (_bCache is { } c && c.Path == bp && c.Src.W == size.Width && c.Src.H == size.Height) b = c.Src;
             else
             {
-                try { b = await Task.Run(() => ReadFile(bp, size.Width, size.Height)); } catch (MagickException) { }
+                // B unreadable or gone: A still opens, without a compare image.
+                try { b = await Task.Run(() => ReadFile(bp, size.Width, size.Height)); }
+                catch (Exception ex) when (ex is MagickException or IOException or UnauthorizedAccessException) { }
                 if (b != null) _bCache = (bp, b);
             }
             if (id != _loadId) { bmp.Dispose(); return; }
@@ -160,11 +175,11 @@ class ImageView : Control, ICustomHitTest
     {
         if (_path is not { } path || layer == Layer) return;
         var id = ++_loadId;
-        var (bmp, src) = await Task.Run(() =>
+        var (bmp, src, _) = await Task.Run(() =>
         {
             if (layer == null) return Decode(path);
             var s = Exr.Read(path, layer);
-            return ((Bitmap)ToBitmap(s.Bgra, s.W, s.H), (Source?)s);
+            return ((Bitmap)ToBitmap(s.Bgra, s.W, s.H), (Source?)s, (string?)layer);
         });
         if (id != _loadId) { bmp.Dispose(); return; }
         Layer = layer;
@@ -174,8 +189,8 @@ class ImageView : Control, ICustomHitTest
         Redraw();
     }
 
-    static async Task<(Bitmap, Source?)> Ahead(Task<(Bitmap, Source?)?> ahead, string path) =>
-        await ahead ?? await Task.Run(() => Decode(path));
+    static async Task<(Bitmap, Source?, string?)> Ahead(Task<(Bitmap, Source?, string?)?> ahead, string path, string? layer) =>
+        await ahead ?? await Task.Run(() => Decode(path, layer));
 
     void Show(Bitmap bmp, string path, Source? src)
     {
@@ -467,7 +482,8 @@ class ImageView : Control, ICustomHitTest
         return wb;
     }
 
-    static (Bitmap, Source?) Decode(string path)
+    // The bitmap, its HDR source if any, and the AOV it shows: the one asked for when the file has it, otherwise null.
+    static (Bitmap, Source?, string?) Decode(string path, string? layer = null)
     {
         var ext = Path.GetExtension(path).ToLowerInvariant();
         if (Fast.Contains(ext))
@@ -479,12 +495,21 @@ class ImageView : Control, ICustomHitTest
                 info.Ping(path);
                 orientation = info.Orientation;
             }
-            if (orientation is OrientationType.TopLeft or OrientationType.Undefined) return (new Bitmap(path), null);
+            if (orientation is OrientationType.TopLeft or OrientationType.Undefined) return (new Bitmap(path), null, null);
         }
         // ponytail: whole image decoded into memory, add tiling when gigapixel images matter
+        var layers = Exr.Layers(path);
+        Source? src = null;
+        if (layer != null && layers?.Any(l => l.Layer == layer) == true)
+        {
+            // An AOV that can't be read (PIZ, say) leaves the image as opened; picking it by hand says why.
+            try { src = Exr.Read(path, layer); }
+            catch (Exception ex) when (ex is NotSupportedException or InvalidDataException) { layer = null; }
+        }
+        else layer = null;
         // A multi-layer EXR without a main RGBA layer opens on its first AOV.
-        var src = Exr.Layers(path) is [var first, ..] && first.Layer.Length > 0 ? Exr.Read(path, first.Layer) : ReadFile(path, null, null);
-        return (ToBitmap(src.Bgra, src.W, src.H), src.Rgba != null ? src : null); // 8-bit: the bitmap holds it all
+        src ??= layers is [var first, ..] && first.Layer.Length > 0 ? Exr.Read(path, first.Layer) : ReadFile(path, null, null);
+        return (ToBitmap(src.Bgra, src.W, src.H), src.Rgba != null ? src : null, layer); // 8-bit: the bitmap holds it all
     }
 
     // Decode with ImageMagick (EXIF orientation applied), optionally resampled to a size (the compare image).
@@ -650,13 +675,16 @@ class ImageView : Control, ICustomHitTest
         if (compare && CompareMode == CompareMode.Wipe)
         {
             double wx = WipeX;
-            ctx.DrawLine(new Pen(new SolidColorBrush(Color.FromArgb(160, 0, 0, 0)), 3), new Point(wx, 0), new Point(wx, view.Height));
-            ctx.DrawLine(new Pen(Brushes.White, 1), new Point(wx, 0), new Point(wx, view.Height));
-            ctx.DrawEllipse(Ui.Panel, new Pen(Brushes.White, 1.5), new Point(wx, view.Height / 2), 9, 9);
+            ctx.DrawLine(WipeShadow, new Point(wx, 0), new Point(wx, view.Height));
+            ctx.DrawLine(WipeLine, new Point(wx, 0), new Point(wx, view.Height));
+            ctx.DrawEllipse(Ui.Panel, WipeKnob, new Point(wx, view.Height / 2), 9, 9);
             Label(ctx, "A", new Point(wx - 22, view.Height / 2 - 8));
             Label(ctx, "B", new Point(wx + 14, view.Height / 2 - 8));
         }
     }
+
+    // Immutable: the type's statics may be set up on a decode thread, where a Pen can't be made.
+    static readonly ImmutablePen WipeShadow = new(0xa0000000, 3), WipeLine = new(Brushes.White, 1), WipeKnob = new(Brushes.White, 1.5);
 
     static void Label(DrawingContext ctx, string text, Point at)
     {
@@ -859,6 +887,7 @@ class ImageView : Control, ICustomHitTest
     // Magnifier next to the pointer: 11x11 source pixels, nearest-neighbour, grid and a marked center pixel.
     sealed class LoupeView : Control
     {
+        static readonly ImmutablePen GridPen = new(0x28000000, 1), CenterShadow = new(Brushes.Black, 3), CenterPen = new((IImmutableBrush)Ui.Accent, 1.5), EdgePen = new((IImmutableBrush)Ui.Edge, 1);
         public const int N = 11;
         const int Cell = 14, Size = N * Cell;
         readonly WriteableBitmap _bmp = new(new PixelSize(N, N), new Avalonia.Vector(96, 96), PixelFormat.Bgra8888, AlphaFormat.Unpremul);
@@ -895,17 +924,16 @@ class ImageView : Control, ICustomHitTest
             {
                 using (ctx.PushRenderOptions(new RenderOptions { BitmapInterpolationMode = BitmapInterpolationMode.None }))
                     ctx.DrawImage(_bmp, new Rect(0, 0, N, N), box);
-                var grid = new Pen(new SolidColorBrush(Color.FromArgb(40, 0, 0, 0)), 1);
                 for (int i = 1; i < N; i++)
                 {
-                    ctx.DrawLine(grid, new Point(x + i * Cell, y), new Point(x + i * Cell, y + Size));
-                    ctx.DrawLine(grid, new Point(x, y + i * Cell), new Point(x + Size, y + i * Cell));
+                    ctx.DrawLine(GridPen, new Point(x + i * Cell, y), new Point(x + i * Cell, y + Size));
+                    ctx.DrawLine(GridPen, new Point(x, y + i * Cell), new Point(x + Size, y + i * Cell));
                 }
                 var center = new Rect(x + N / 2 * Cell, y + N / 2 * Cell, Cell, Cell);
-                ctx.DrawRectangle(null, new Pen(Brushes.Black, 3), center);
-                ctx.DrawRectangle(null, new Pen(Ui.Accent, 1.5), center);
+                ctx.DrawRectangle(null, CenterShadow, center);
+                ctx.DrawRectangle(null, CenterPen, center);
             }
-            ctx.DrawRectangle(null, new Pen(Ui.Edge, 1), clip);
+            ctx.DrawRectangle(null, EdgePen, clip);
         }
     }
 }

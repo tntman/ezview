@@ -31,7 +31,8 @@ static class Exr
                 .Select(g => (g.Key, Names(g.Select(c => Suffix(c.Name))))).ToList();
             return layers.Count > 0 ? layers : null;
         }
-        catch (Exception ex) when (ex is IOException or InvalidDataException or EndOfStreamException or NotSupportedException or UnauthorizedAccessException) { return null; }
+        // ArgumentException: sizes and offsets in a damaged header.
+        catch (Exception ex) when (ex is IOException or InvalidDataException or NotSupportedException or UnauthorizedAccessException or ArgumentException) { return null; }
     }
 
     static string Names(IEnumerable<string> suffixes)
@@ -72,13 +73,17 @@ static class Exr
         var rgba = new float[w * ht * 4];
         if (map[3] < 0) for (int i = 3; i < rgba.Length; i += 4) rgba[i] = 1;
         var file = File.ReadAllBytes(path);
-        Parallel.For(0, chunks, n =>
+        // A file cut short or still being written has chunks that point outside it or don't unpack.
+        try { Parallel.For(0, chunks, Chunk); }
+        catch (AggregateException) { throw new InvalidDataException("The file is incomplete or damaged"); }
+
+        void Chunk(int n)
         {
             long at = BitConverter.ToInt64(file, (int)h.ChunksAt + n * 8);
             int y = BitConverter.ToInt32(file, (int)at), size = BitConverter.ToInt32(file, (int)at + 4);
             int rows = Math.Min(lines, dy1 - y + 1);
             var raw = new ReadOnlySpan<byte>(file, (int)at + 8, size);
-            var block = size == rows * lineBytes ? raw.ToArray() : Decompress(raw, rows * lineBytes, h.Compression);
+            var block = size == rows * lineBytes ? raw : Decompress(raw, rows * lineBytes, h.Compression);
             for (int r = 0; r < rows; r++)
             {
                 int vy = y + r - vy0;
@@ -95,14 +100,14 @@ static class Exr
                         int s = src + x * ch.Bytes;
                         rgba[(vy * w + vx) * 4 + c] = ch.Type switch
                         {
-                            1 => (float)BitConverter.UInt16BitsToHalf(BitConverter.ToUInt16(block, s)),
-                            2 => BitConverter.ToSingle(block, s),
-                            _ => BitConverter.ToUInt32(block, s),
+                            1 => (float)BitConverter.UInt16BitsToHalf(BitConverter.ToUInt16(block[s..])),
+                            2 => BitConverter.ToSingle(block[s..]),
+                            _ => BitConverter.ToUInt32(block[s..]),
                         };
                     }
                 }
             }
-        });
+        }
         var src = new Source([], rgba, true, w, ht);
         return src with { Bgra = ImageView.Adjust(src, 0, 0, 1) };
     }
@@ -123,8 +128,14 @@ static class Exr
         }
         else
         {
-            using var z = new ZLibStream(new MemoryStream(data.ToArray()), CompressionMode.Decompress);
-            z.ReadExactly(t);
+            unsafe
+            {
+                fixed (byte* p = data)
+                {
+                    using var z = new ZLibStream(new UnmanagedMemoryStream(p, data.Length), CompressionMode.Decompress);
+                    z.ReadExactly(t);
+                }
+            }
         }
         // Undo the byte delta predictor, then the split into even and odd bytes.
         for (int i = 1; i < size; i++) t[i] = (byte)(t[i - 1] + t[i] - 128);
@@ -191,7 +202,7 @@ static class Exr
             }
             return rows;
         }
-        catch (Exception ex) when (ex is IOException or EndOfStreamException or UnauthorizedAccessException) { return null; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException) { return null; }
     }
 
     static string Box(int x0, int y0, int x1, int y1) => $"{x0} {y0} – {x1} {y1}  ({x1 - x0 + 1} × {y1 - y0 + 1})";

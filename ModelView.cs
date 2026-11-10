@@ -71,6 +71,8 @@ partial class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
 
     GL? _gl;
     uint _prog, _white;
+    int[] _loc = []; // uniform locations: mvp, eye, tex, col, unlit, useLm, lm, hl, faceted
+    readonly Dictionary<byte[], uint> _texOf = []; // one GL texture per pixel array: parts that share an image share its texture
     List<GpuPart> _gpu = [];
     List<Part>? _parts, _pending;
     Vector3 _center, _target, _min;
@@ -211,11 +213,15 @@ partial class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
             for (int i = 0; i < p.Verts.Length; i += 8)
             {
                 var v = new Vector3(p.Verts[i], p.Verts[i + 1], p.Verts[i + 2]);
+                if (!Finite(v)) continue;
                 min = Vector3.Min(min, v);
                 max = Vector3.Max(max, v);
             }
         return (parts, min, max, info);
     }
+
+    // A NaN / infinite point (broken exports) is left out of every bounding box, or it would blow up the camera.
+    static bool Finite(Vector3 v) => float.IsFinite(v.X + v.Y + v.Z);
 
     static (List<Part>, Vector3, Vector3, List<(string, string)>) FromScene(AnimScene scene)
     {
@@ -228,15 +234,20 @@ partial class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
             return new Part(v, Array.ConvertAll(m.Tris, i => (uint)i), m.Texture?.Rgba, m.Texture?.W ?? 0, m.Texture?.H ?? 0, m.Color) { Name = m.Name };
         }).ToList();
         Vector3 min = new(float.MaxValue), max = new(float.MinValue);
-        foreach (var f in new[] { scene.FrameCount - 1, scene.FrameCount / 2, 0 }) // bounds over a few frames; frame 0 last so the parts start there
+        var moving = scene.Meshes.Select(Moves).ToArray();
+        foreach (var f in new[] { scene.FrameCount - 1, scene.FrameCount / 2, 0 }.Distinct()) // bounds over a few frames; frame 0 last so the parts start there
         {
-            Evaluate(scene, f, parts);
-            foreach (var p in parts)
+            var only = f == 0 ? null : moving; // static meshes look the same on every frame: once is enough
+            Evaluate(scene, f, parts, only);
+            for (int k = 0; k < parts.Count; k++)
             {
+                if (only != null && !only[k]) continue;
+                var p = parts[k];
                 Vector3 lo = new(float.MaxValue), hi = new(float.MinValue);
                 for (int i = 0; i < p.Verts.Length; i += 8)
                 {
                     var v = new Vector3(p.Verts[i], p.Verts[i + 1], p.Verts[i + 2]);
+                    if (!Finite(v)) continue;
                     lo = Vector3.Min(lo, v);
                     hi = Vector3.Max(hi, v);
                 }
@@ -245,6 +256,7 @@ partial class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
                     for (int c = 0; c < 8; c++)
                     {
                         var v = Vector3.Transform(new Vector3((c & 1) == 0 ? lo.X : hi.X, (c & 2) == 0 ? lo.Y : hi.Y, (c & 4) == 0 ? lo.Z : hi.Z), m);
+                        if (!Finite(v)) continue;
                         min = Vector3.Min(min, v);
                         max = Vector3.Max(max, v);
                     }
@@ -268,7 +280,7 @@ partial class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
     {
         var keep = new List<int>(tris.Length);
         for (int i = 0; i + 2 < tris.Length; i += 3)
-            if ((uint)tris[i] < count && (uint)tris[i + 1] < count && (uint)tris[i + 2] < count) keep.AddRange([tris[i], tris[i + 1], tris[i + 2]]);
+            if ((uint)tris[i] < count && (uint)tris[i + 1] < count && (uint)tris[i + 2] < count) { keep.Add(tris[i]); keep.Add(tris[i + 1]); keep.Add(tris[i + 2]); }
         return [.. keep];
     }
 
@@ -286,7 +298,8 @@ partial class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
             var v = parts[m].Verts;
             if (pts.Length * 8 != v.Length) return; // point count changed mid-cache: keep the last good frame
             var world = mesh.Node.WorldAt(t) * scene.Root;
-            var pos = new Vector3[pts.Length];
+            var pool = System.Buffers.ArrayPool<Vector3>.Shared; // scratch is rented: playback would otherwise feed the GC every frame
+            var pos = pool.Rent(pts.Length);
             if (mesh.Instances != null)
             {
                 // Instanced: points stay in prototype space, the GPU applies each placement.
@@ -295,7 +308,8 @@ partial class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
             }
             else
                 for (int i = 0; i < pts.Length; i++) pos[i] = Vector3.Transform(pts[i], world);
-            var nrm = new Vector3[pts.Length];
+            var nrm = pool.Rent(pts.Length);
+            Array.Clear(nrm, 0, pts.Length);
             var tris = mesh.Tris;
             for (int i = 0; i + 2 < tris.Length; i += 3)
             {
@@ -308,6 +322,8 @@ partial class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
                 pos[i].CopyTo(v, i * 8);
                 n.CopyTo(v, i * 8 + 3);
             }
+            pool.Return(pos);
+            pool.Return(nrm);
         });
     }
 
@@ -368,6 +384,7 @@ partial class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
         for (int i = 0; i < p.Verts.Length; i += 8)
         {
             var v = new Vector3(p.Verts[i], p.Verts[i + 1], p.Verts[i + 2]);
+            if (!Finite(v)) continue;
             lo = Vector3.Min(lo, v);
             hi = Vector3.Max(hi, v);
         }
@@ -377,6 +394,7 @@ partial class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
             for (int c = 0; c < 8; c++)
             {
                 var v = Vector3.Transform(new Vector3((c & 1) == 0 ? lo.X : hi.X, (c & 2) == 0 ? lo.Y : hi.Y, (c & 4) == 0 ? lo.Z : hi.Z), m);
+                if (!Finite(v)) continue;
                 min = Vector3.Min(min, v);
                 max = Vector3.Max(max, v);
             }
@@ -403,6 +421,7 @@ partial class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
     public bool ShowGeometry { get; private set; } = true;
     public void ToggleGeometry() { ShowGeometry = !ShowGeometry; RequestNextFrameRendering(); }
     uint _boneVao, _boneVbo;
+    (AnimScene?, int) _boneKey; // scene + frame the bone buffer was built for
 
     public static string DumpSkeleton(string path)
     {
@@ -514,7 +533,7 @@ partial class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
                 var m = s->MMeshes[mi];
                 var tris = new List<int>((int)m->MNumFaces * 3);
                 for (int f = 0; f < m->MNumFaces; f++)
-                    if (m->MFaces[f].MNumIndices == 3) tris.AddRange([(int)m->MFaces[f].MIndices[0], (int)m->MFaces[f].MIndices[1], (int)m->MFaces[f].MIndices[2]]);
+                    if (m->MFaces[f].MNumIndices == 3) { tris.Add((int)m->MFaces[f].MIndices[0]); tris.Add((int)m->MFaces[f].MIndices[1]); tris.Add((int)m->MFaces[f].MIndices[2]); }
                 if (tris.Count == 0) continue;
                 int nv = (int)m->MNumVertices;
                 var pts = new Vector3[nv];
@@ -621,6 +640,7 @@ partial class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
             foreach (var (j, _) in scene.Bones)
             {
                 var p = (j.WorldAt(scene.TimeOf(f)) * scene.Root).Translation;
+                if (!Finite(p)) continue;
                 min = Vector3.Min(min, p);
                 max = Vector3.Max(max, p);
             }
@@ -631,26 +651,30 @@ partial class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
     unsafe void DrawSkeleton(GL gl, int colLoc, int unlitLoc)
     {
         if (!ShowSkeleton || _scene is not { Bones.Count: > 0 } sc) return;
-        double t = sc.TimeOf(_frame);
-        var v = new float[sc.Bones.Count * 6];
-        for (int i = 0; i < sc.Bones.Count; i++)
-        {
-            var (j, p) = sc.Bones[i];
-            (j.WorldAt(t) * sc.Root).Translation.CopyTo(v, i * 6);
-            (p.WorldAt(t) * sc.Root).Translation.CopyTo(v, i * 6 + 3);
-        }
         if (_boneVao == 0) { _boneVao = gl.GenVertexArray(); _boneVbo = gl.GenBuffer(); }
         gl.BindVertexArray(_boneVao);
-        gl.BindBuffer(BufferTargetARB.ArrayBuffer, _boneVbo);
-        gl.BufferData<float>(BufferTargetARB.ArrayBuffer, v, BufferUsageARB.DynamicDraw);
-        gl.EnableVertexAttribArray(0);
-        gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, 12, (void*)0);
+        if (_boneKey != (sc, _frame)) // the lines only change with the frame, not with the camera
+        {
+            double t = sc.TimeOf(_frame);
+            var v = new float[sc.Bones.Count * 6];
+            for (int i = 0; i < sc.Bones.Count; i++)
+            {
+                var (j, p) = sc.Bones[i];
+                (j.WorldAt(t) * sc.Root).Translation.CopyTo(v, i * 6);
+                (p.WorldAt(t) * sc.Root).Translation.CopyTo(v, i * 6 + 3);
+            }
+            gl.BindBuffer(BufferTargetARB.ArrayBuffer, _boneVbo);
+            gl.BufferData<float>(BufferTargetARB.ArrayBuffer, v, BufferUsageARB.DynamicDraw);
+            gl.EnableVertexAttribArray(0);
+            gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, 12, (void*)0);
+            _boneKey = (sc, _frame);
+        }
         gl.Disable(EnableCap.DepthTest);
         gl.Uniform1(unlitLoc, 1);
         gl.Uniform4(colLoc, 1f, 0.36f, 0.18f, 1f);
-        gl.DrawArrays(PrimitiveType.Lines, 0, (uint)(v.Length / 3));
+        gl.DrawArrays(PrimitiveType.Lines, 0, (uint)sc.Bones.Count * 2);
         gl.Uniform4(colLoc, 1f, 1f, 1f, 1f);
-        gl.DrawArrays(PrimitiveType.Points, 0, (uint)(v.Length / 3));
+        gl.DrawArrays(PrimitiveType.Points, 0, (uint)sc.Bones.Count * 2);
         gl.Enable(EnableCap.DepthTest);
     }
 
@@ -697,8 +721,7 @@ partial class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
                     var n = m->MNormals != null && Vector3.TransformNormal(m->MNormals[j], normalWorld) is var tn && tn.LengthSquared() > 0
                         ? Vector3.Normalize(tn) : Vector3.UnitY;
                     var t = uv != null ? uv[j] : default;
-                    min = Vector3.Min(min, p);
-                    max = Vector3.Max(max, p);
+                    if (Finite(p)) { min = Vector3.Min(min, p); max = Vector3.Max(max, p); }
                     p.CopyTo(v, j * 8);
                     n.CopyTo(v, j * 8 + 3);
                     v[j * 8 + 6] = t.X;
@@ -708,7 +731,7 @@ partial class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
                 for (int f = 0; f < m->MNumFaces; f++)
                 {
                     var face = m->MFaces[f];
-                    if (face.MNumIndices == 3) idx.AddRange([face.MIndices[0], face.MIndices[1], face.MIndices[2]]);
+                    if (face.MNumIndices == 3) { idx.Add(face.MIndices[0]); idx.Add(face.MIndices[1]); idx.Add(face.MIndices[2]); }
                 }
 
                 var (color, tex) = Material(ai, s, m, dir, texCache);
@@ -757,7 +780,7 @@ partial class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
             int embedded = path.StartsWith('*') ? int.Parse(path[1..]) : -1;
             for (int k = 0; embedded < 0 && k < s->MNumTextures; k++)
                 if (Path.GetFileName(s->MTextures[k]->MFilename.AsString) is { Length: > 0 } fn && fn == Path.GetFileName(path)) embedded = k;
-            if (embedded >= 0)
+            if ((uint)embedded < s->MNumTextures)
             {
                 var t = s->MTextures[embedded];
                 if (t->MHeight == 0) return Decode(new MagickImage(new ReadOnlySpan<byte>(t->PcData, (int)t->MWidth).ToArray()));
@@ -785,11 +808,20 @@ partial class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
         path = path.Replace('/', '\\');
         foreach (var c in new[] { Path.Combine(dir, path), Path.Combine(dir, Path.GetFileName(path)) })
         {
+            if (OffShare(c, dir)) continue;
             if (File.Exists(c)) return c;
             foreach (var ext in new[] { ".tga", ".png", ".jpg", ".pcx", ".dds", ".bmp" })
                 if (File.Exists(Path.ChangeExtension(c, ext))) return Path.ChangeExtension(c, ext);
         }
         return null;
+    }
+
+    // A path named inside a model file must not reach another machine: opening \\host\share hands the user's
+    // login to that host. Network paths are followed only when the model itself lives on the same share.
+    internal static bool OffShare(string file, string modelDir)
+    {
+        var root = Path.GetPathRoot(Path.GetFullPath(file)) ?? "";
+        return root.StartsWith(@"\\", StringComparison.Ordinal) && !root.Equals(Path.GetPathRoot(Path.GetFullPath(modelDir)), StringComparison.OrdinalIgnoreCase);
     }
 
     static (byte[], int, int) Decode(MagickImage img)
@@ -807,9 +839,13 @@ partial class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
             ? "#version 300 es\nprecision highp float;\n"
             : "#version 330 core\n";
         _prog = gl.CreateProgram();
-        gl.AttachShader(_prog, Shader(gl, ShaderType.VertexShader, head + Vs));
-        gl.AttachShader(_prog, Shader(gl, ShaderType.FragmentShader, head + Fs));
+        uint vs = Shader(gl, ShaderType.VertexShader, head + Vs), fs = Shader(gl, ShaderType.FragmentShader, head + Fs);
+        gl.AttachShader(_prog, vs);
+        gl.AttachShader(_prog, fs);
         gl.LinkProgram(_prog);
+        gl.DeleteShader(vs); // only flagged: they go when the program does
+        gl.DeleteShader(fs);
+        _loc = Array.ConvertAll(new[] { "mvp", "eye", "tex", "col", "unlit", "useLm", "lm", "hl", "faceted" }, n => gl.GetUniformLocation(_prog, n));
         _white = Texture(gl, [255, 255, 255, 255], 1, 1);
         if (glif.ContextInfo.Version.Type != GlProfileType.OpenGLES) gl.Enable((EnableCap)0x8642); // GL_PROGRAM_POINT_SIZE
         Blur.Init(gl, glif.ContextInfo.Version.Type == GlProfileType.OpenGLES);
@@ -828,20 +864,28 @@ partial class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
         return sh;
     }
 
-    static uint Texture(GL gl, byte[] rgba, int w, int h)
+    // lightmap: a page of baked light is its own atlas, so it must not wrap around or blend into smaller mips.
+    static uint Texture(GL gl, byte[] rgba, int w, int h, bool lightmap = false)
     {
         var t = gl.GenTexture();
         gl.BindTexture(TextureTarget.Texture2D, t);
         gl.PixelStore(PixelStoreParameter.UnpackAlignment, 1);
         gl.TexImage2D<byte>(TextureTarget.Texture2D, 0, InternalFormat.Rgba, (uint)w, (uint)h, 0, PixelFormat.Rgba, PixelType.UnsignedByte, rgba);
-        gl.GenerateMipmap(TextureTarget.Texture2D);
-        gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.LinearMipmapLinear);
+        if (!lightmap) gl.GenerateMipmap(TextureTarget.Texture2D);
+        gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)(lightmap ? TextureMinFilter.Linear : TextureMinFilter.LinearMipmapLinear));
         gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Linear);
+        if (lightmap)
+        {
+            gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
+            gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
+        }
         return t;
     }
 
-    static unsafe GpuPart Upload(GL gl, Part p)
+    unsafe GpuPart Upload(GL gl, Part p)
     {
+        uint Shared(byte[] rgba, int w, int h, bool lightmap = false) =>
+            _texOf.TryGetValue(rgba, out var t) ? t : _texOf[rgba] = Texture(gl, rgba, w, h, lightmap);
         var vao = gl.GenVertexArray();
         gl.BindVertexArray(vao);
         var vbo = gl.GenBuffer();
@@ -855,7 +899,7 @@ partial class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
             gl.EnableVertexAttribArray(a);
             gl.VertexAttribPointer(a, a == 2 ? 2 : 3, VertexAttribPointerType.Float, false, 32, (void*)(a * 12));
         }
-        var g = new GpuPart(p, vao, vbo, ebo, p.Rgba != null ? Texture(gl, p.Rgba, p.TexW, p.TexH) : 0) { InstVbo = gl.GenBuffer() };
+        var g = new GpuPart(p, vao, vbo, ebo, p.Rgba != null ? Shared(p.Rgba, p.TexW, p.TexH) : 0) { InstVbo = gl.GenBuffer() };
         UploadInstances(gl, g);
         InstanceAttribs(gl, g.InstVbo);
         if (p.LmUv != null && p.Lm != null)
@@ -865,7 +909,7 @@ partial class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
             gl.BufferData<float>(BufferTargetARB.ArrayBuffer, p.LmUv, BufferUsageARB.StaticDraw);
             gl.EnableVertexAttribArray(7);
             gl.VertexAttribPointer(7, 2, VertexAttribPointerType.Float, false, 8, (void*)0);
-            g.LmTex = Texture(gl, p.Lm, 128, 128);
+            g.LmTex = Shared(p.Lm, 128, 128, true);
         }
         gl.BindVertexArray(0);
         return g;
@@ -948,12 +992,13 @@ partial class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
         {
             if (g.LineVao != 0) { gl.DeleteVertexArray(g.LineVao); gl.DeleteBuffer(g.LineEbo); }
             gl.DeleteBuffer(g.InstVbo);
-            if (g.LmVbo != 0) { gl.DeleteBuffer(g.LmVbo); gl.DeleteTexture(g.LmTex); }
+            if (g.LmVbo != 0) gl.DeleteBuffer(g.LmVbo);
             gl.DeleteVertexArray(g.Vao);
             gl.DeleteBuffer(g.Vbo);
             gl.DeleteBuffer(g.Ebo);
-            if (g.Tex != 0) gl.DeleteTexture(g.Tex);
         }
+        foreach (var t in _texOf.Values) gl.DeleteTexture(t); // shared between parts: each one exactly once
+        _texOf.Clear();
         _gpu = [];
     }
 
@@ -964,7 +1009,7 @@ partial class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
         _gl.DeleteProgram(_prog);
         _gl.DeleteTexture(_white);
         if (_gridVao != 0) { _gl.DeleteVertexArray(_gridVao); _gl.DeleteBuffer(_gridVbo); _gridVao = 0; _gridDirty = true; }
-        if (_boneVao != 0) { _gl.DeleteVertexArray(_boneVao); _gl.DeleteBuffer(_boneVbo); _boneVao = 0; }
+        if (_boneVao != 0) { _gl.DeleteVertexArray(_boneVao); _gl.DeleteBuffer(_boneVbo); _boneVao = 0; _boneKey = default; }
         Blur.Deinit();
         _gl = null;
     }
@@ -994,7 +1039,7 @@ partial class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
                     var g = _gpu[i];
                     gl.BindBuffer(BufferTargetARB.ArrayBuffer, g.Vbo);
                     gl.BufferSubData<float>(BufferTargetARB.ArrayBuffer, 0, g.Part.Verts);
-                    if (g.Part.Inst.Length > 1) UploadInstances(gl, g);
+                    if (_scene.Meshes[i].Instances != null) UploadInstances(gl, g);
                 }
                 _frameDirty = false;
             }
@@ -1025,17 +1070,14 @@ partial class ModelView : OpenGlControlBase, ICustomHitTest, IPlayback
         var mvp = Matrix4x4.CreateLookAt(eye, _target, Vector3.UnitY) *
                   Matrix4x4.CreatePerspectiveFieldOfView(0.8f, w / (float)h, _dist * 0.01f, _dist + _radius * 4);
         gl.UseProgram(_prog);
-        gl.UniformMatrix4(gl.GetUniformLocation(_prog, "mvp"), 1, false, (float*)&mvp);
-        gl.Uniform3(gl.GetUniformLocation(_prog, "eye"), eye.X, eye.Y, eye.Z);
-        gl.Uniform1(gl.GetUniformLocation(_prog, "tex"), 0);
-        var colLoc = gl.GetUniformLocation(_prog, "col");
-        var unlitLoc = gl.GetUniformLocation(_prog, "unlit");
-        var useLmLoc = gl.GetUniformLocation(_prog, "useLm");
-        gl.Uniform1(gl.GetUniformLocation(_prog, "lm"), 1);
+        gl.UniformMatrix4(_loc[0], 1, false, (float*)&mvp);
+        gl.Uniform3(_loc[1], eye.X, eye.Y, eye.Z);
+        gl.Uniform1(_loc[2], 0);
+        int colLoc = _loc[3], unlitLoc = _loc[4], useLmLoc = _loc[5], hlLoc = _loc[7];
+        gl.Uniform1(_loc[6], 1);
         gl.Uniform1(useLmLoc, 0);
-        var hlLoc = gl.GetUniformLocation(_prog, "hl");
         gl.Uniform1(hlLoc, 0);
-        gl.Uniform1(gl.GetUniformLocation(_prog, "faceted"), Flat ? 1 : 0);
+        gl.Uniform1(_loc[8], Flat ? 1 : 0);
         gl.ActiveTexture(TextureUnit.Texture0);
 
         if (_pickAt is { } pick)

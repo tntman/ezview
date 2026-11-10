@@ -37,7 +37,7 @@ unsafe class GlBlur
     GL? _gl;
     uint _prog, _vao;
     readonly uint[] _fbo = new uint[2], _tex = new uint[2];
-    int _sw, _sh, _locDir, _locAlpha;
+    int _sw, _sh, _locDir, _locAlpha, _locTex;
 
     public void Init(GL gl, bool es)
     {
@@ -52,8 +52,10 @@ unsafe class GlBlur
             gl.GetShader(sh, ShaderParameterName.CompileStatus, out int ok);
             if (ok == 0) throw new Exception(gl.GetShaderInfoLog(sh));
             gl.AttachShader(_prog, sh);
+            gl.DeleteShader(sh); // only flagged: it goes when the program does
         }
         gl.LinkProgram(_prog);
+        _locTex = gl.GetUniformLocation(_prog, "tex");
         _locDir = gl.GetUniformLocation(_prog, "dir");
         _locAlpha = gl.GetUniformLocation(_prog, "alpha");
         _vao = gl.GenVertexArray();
@@ -113,7 +115,7 @@ unsafe class GlBlur
         gl.UseProgram(_prog);
         gl.BindVertexArray(_vao);
         gl.ActiveTexture(TextureUnit.Texture0);
-        gl.Uniform1(gl.GetUniformLocation(_prog, "tex"), 0);
+        gl.Uniform1(_locTex, 0);
         gl.Viewport(0, 0, (uint)sw, (uint)sh);
         for (int round = 0; round < 2; round++)
         {

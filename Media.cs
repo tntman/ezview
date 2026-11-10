@@ -97,7 +97,19 @@ static partial class Media
         var seqs = sorted
             .Select(f => (f, m: Frame(f)))
             .Where(x => x.m != null && int.TryParse(x.m.Groups["num"].Value, out _)) // "cam.20231015120000.jpg" is no frame number
-            .GroupBy(x => (Path.GetDirectoryName(x.f), x.m!.Groups["pre"].Value.ToLowerInvariant(), x.m.Groups["num"].Length, x.m.Groups["ext"].Value.ToLowerInvariant()))
+            .GroupBy(x => (Path.GetDirectoryName(x.f), x.m!.Groups["pre"].Value.ToLowerInvariant(), x.m.Groups["ext"].Value.ToLowerInvariant()))
+            .SelectMany(g =>
+            {
+                // One sequence per number width: zero-padded numbers of one length (0998, 0999) plus the unpadded ones
+                // that continue them (1000, 10000). With no padding at all (9, 10, 11) every number belongs.
+                static bool Padded(string n) => n.Length > 1 && n[0] == '0';
+                var widths = g.Select(x => x.m!.Groups["num"].Value).Where(Padded).Select(n => n.Length).Distinct().ToArray();
+                return g.GroupBy(x =>
+                {
+                    var n = x.m!.Groups["num"].Value;
+                    return Padded(n) ? n.Length : widths.Where(w => w <= n.Length).DefaultIfEmpty(0).Max();
+                });
+            })
             .Where(g => g.Count() >= 2)
             .ToDictionary(g => g.First().f, g => g.Select(x => x.f).ToArray());
         var inSeq = seqs.Values.SelectMany(v => v).ToHashSet();

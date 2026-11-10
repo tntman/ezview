@@ -33,13 +33,13 @@ static class Usd
     public static AnimScene Load(string path)
     {
         path = Path.GetFullPath(path);
-        var (_, crate) = ReadLayer(path);
-        var specs = Compose(path, [], 0);
+        var cache = new Dictionary<string, (Dictionary<string, Spec> Specs, bool Crate)>();
+        var specs = Compose(path, cache, 0);
         FlattenVariants(specs);
-        return Build(specs, crate ? "USD (binary)" : "USD (text)");
+        return Build(specs, cache[path].Crate ? "USD (binary)" : "USD (text)");
     }
 
-    static (Dictionary<string, Spec> Specs, bool Crate) ReadLayer(string path)
+    static (Dictionary<string, Spec> Specs, bool Crate) ReadLayer(string path, string? target = null, Dictionary<string, object?>? sel = null)
     {
         var bytes = File.ReadAllBytes(path);
         if (path.EndsWith(".usdz", StringComparison.OrdinalIgnoreCase))
@@ -54,39 +54,61 @@ static class Usd
             bytes = ms.ToArray();
         }
         bool crate = bytes.Length > 8 && Encoding.ASCII.GetString(bytes, 0, 8) == "PXR-USDC";
-        return (crate ? new Crate(bytes).Specs() : new Usda(Encoding.UTF8.GetString(bytes)).Parse(), crate);
+        return (crate ? new Crate(bytes).Specs() : new Usda(Encoding.UTF8.GetString(bytes), target, sel).Parse(), crate);
     }
 
     // ---------------------------------------------------------------- composition
 
     // Resolves sublayers, references and payloads of one layer. Composed layers are cached, so an asset
     // referenced a hundred times (Kitchen Set's spoons) is read once; the cache also stops reference cycles.
-    static Dictionary<string, Spec> Compose(string file, Dictionary<string, Dictionary<string, Spec>> cache, int depth)
+    // `sel` = the variant selections the referencing prim makes for `target` (null = the default prim): a text layer
+    // picks its variants while parsing, so it is composed once per distinct selection.
+    // ponytail: only selections on the referencing prim itself are handed down, not ones on its children
+    static Dictionary<string, Spec> Compose(string file, Dictionary<string, (Dictionary<string, Spec> Specs, bool Crate)> cache, int depth,
+        string? target = null, Dictionary<string, object?>? sel = null)
     {
-        if (cache.TryGetValue(file, out var done)) return done;
-        var specs = ReadLayer(file).Specs;
-        cache[file] = specs;
+        if (cache.TryGetValue(file, out var done) && (sel == null || done.Crate)) return done.Specs;
+        var key = sel == null ? file : $"{file}|{target}|{string.Join(",", sel.OrderBy(kv => kv.Key, StringComparer.Ordinal).Select(kv => kv.Key + "=" + kv.Value))}";
+        if (cache.TryGetValue(key, out done)) return done.Specs;
+        var (specs, crate) = ReadLayer(file, target, sel);
+        if (crate) (key, sel) = (file, null); // binary layers keep every variant until FlattenVariants
+        cache[key] = (specs, crate);
         if (depth > 32) return specs;
         var dir = Path.GetDirectoryName(file)!;
 
-        Dictionary<string, Spec>? Layer(string asset)
+        Dictionary<string, Spec>? Layer(string asset, string? prim, Dictionary<string, object?>? pick)
         {
             if (asset == "") return specs;
             var f = Path.GetFullPath(Path.Combine(dir, asset));
-            return File.Exists(f) ? Compose(f, cache, depth + 1) : null;
+            return !ModelView.OffShare(f, dir) && File.Exists(f) ? Compose(f, cache, depth + 1, prim, pick) : null;
         }
 
         if (specs.GetValueOrDefault("/") is { } root)
             foreach (var sub in Refs(root.Fields.GetValueOrDefault("subLayers")))
-                if (Layer(sub.Asset) is { } s) Graft(specs, s, "/", "/");
+                if (Layer(sub.Asset, target, sel) is { } s) Graft(specs, s, "/", "/");
 
-        var prims = specs.Where(kv => kv.Value.Kind == "prim").Select(kv => kv.Key).OrderBy(p => p.Count(c => c == '/')).ToList();
-        foreach (var prim in prims)
+        var self = target ?? DefaultPrim(specs);
+        IEnumerable<Ref> Arcs(string prim) => Refs(specs[prim].Fields.GetValueOrDefault("references")).Concat(Refs(specs[prim].Fields.GetValueOrDefault("payload")));
+        void Resolve(string prim)
         {
             var fields = specs[prim].Fields;
-            foreach (var r in Refs(fields.GetValueOrDefault("references")).Concat(Refs(fields.GetValueOrDefault("payload"))))
-                if (Layer(r.Asset) is { } src && (r.Prim ?? DefaultPrim(src)) is { } target)
-                    Graft(specs, src, target, prim);
+            var pick = Selection(fields);
+            if (prim == self && sel != null) pick = pick == null ? sel : new(sel.Concat(pick.Where(kv => !sel.ContainsKey(kv.Key))));
+            if (pick is { Count: 0 }) pick = null;
+            foreach (var r in Arcs(prim))
+                if (Layer(r.Asset, r.Prim, pick) is { } src && (r.Prim ?? DefaultPrim(src)) is { } from)
+                    Graft(specs, src, from, prim);
+        }
+
+        // Prims that reference this layer itself go last, and again while that adds anything: the subtree they copy
+        // must have its own references resolved first.
+        var prims = specs.Where(kv => kv.Value.Kind == "prim").Select(kv => kv.Key).OrderBy(p => p.Count(c => c == '/')).ToList();
+        var inner = prims.Where(p => Arcs(p).Any(r => r.Asset == "")).ToList();
+        foreach (var prim in prims.Except(inner)) Resolve(prim);
+        for (int n = -1, pass = 0; n != specs.Count && pass < 8; pass++)
+        {
+            n = specs.Count;
+            foreach (var prim in inner) Resolve(prim);
         }
         return specs;
     }
@@ -109,18 +131,27 @@ static class Usd
     // Copies the subtree at `from` in src to `to` in dst as weaker opinions: existing fields win.
     static void Graft(Dictionary<string, Spec> dst, Dictionary<string, Spec> src, string from, string to)
     {
-        foreach (var (p, spec) in src.ToList())
+        string slash = from + "/", dot = from + ".";
+        foreach (var (p, spec) in (IEnumerable<KeyValuePair<string, Spec>>)(ReferenceEquals(dst, src) ? src.ToList() : src))
         {
             string target;
             if (from == "/") target = p;
             else if (p == from) target = to;
-            else if (p.StartsWith(from + "/") || p.StartsWith(from + ".")) target = to + p[from.Length..];
+            else if (p.StartsWith(slash, StringComparison.Ordinal) || p.StartsWith(dot, StringComparison.Ordinal)) target = to + p[from.Length..];
             else continue;
             if (!dst.TryGetValue(target, out var existing)) dst[target] = spec.Clone();
             else if (!ReferenceEquals(existing, spec))
+            {
+                // Variant selections compose per set: the weaker layer's pick stands for every set the stronger leaves open.
+                if (Selection(existing.Fields) is { } mine && Selection(spec.Fields) is { } theirs && theirs.Keys.Any(k => !mine.ContainsKey(k)))
+                    existing.Fields[existing.Fields.ContainsKey("variants") ? "variants" : "variantSelection"] = new Dictionary<string, object?>(mine.Concat(theirs.Where(kv => !mine.ContainsKey(kv.Key))));
                 foreach (var (k, v) in spec.Fields) existing.Fields.TryAdd(k, v);
+            }
         }
     }
+
+    static Dictionary<string, object?>? Selection(Dictionary<string, object?>? fields) =>
+        (fields?.GetValueOrDefault("variants") ?? fields?.GetValueOrDefault("variantSelection")) as Dictionary<string, object?>;
 
     // Binary layers keep variant contents under "/Prim/{set=selection}/..." paths. After composition (when every
     // layer's selections are known) the selected variant — or the first one — is merged into the prim as weaker
@@ -140,9 +171,14 @@ static class Usd
                 var prim = key[..open];
                 var pair = key[(open + 2)..close].Split('=', 2);
                 var (set, choice) = (pair[0], pair.Length > 1 ? pair[1] : "");
+                if (choice == "") // the variant set's own spec: it only lists the variants, in authored order
+                {
+                    if (Strings(spec.Fields.GetValueOrDefault("variantChildren")).FirstOrDefault() is { } v) firstSeen.TryAdd((prim, set), v);
+                    specs.Remove(key);
+                    continue;
+                }
                 var fields = specs.GetValueOrDefault(prim)?.Fields;
-                var selected = ((fields?.GetValueOrDefault("variants") ?? fields?.GetValueOrDefault("variantSelection")) as Dictionary<string, object?>)
-                    ?.GetValueOrDefault(set) as string;
+                var selected = Selection(fields)?.GetValueOrDefault(set) as string;
                 if (string.IsNullOrEmpty(selected))
                 {
                     if (!firstSeen.TryGetValue((prim, set), out var first)) firstSeen[(prim, set)] = first = choice;
@@ -243,7 +279,7 @@ static class Usd
 
         // Shader colors indexed once: material path -> first diffuseColor found under it.
         var shaderColors = specs
-            .Where(kv => kv.Key.EndsWith(".inputs:diffuseColor"))
+            .Where(kv => kv.Key.EndsWith(".inputs:diffuseColor", StringComparison.Ordinal))
             .Select(kv => (Path: kv.Key, C: Flatten(kv.Value.Fields.GetValueOrDefault("default")).ToArray()))
             .Where(x => x.C.Length >= 3)
             .ToList();
@@ -253,8 +289,9 @@ static class Usd
             var rel = specs.GetValueOrDefault(prim + ".material:binding");
             var target = Strings(rel?.Fields.GetValueOrDefault("targetPaths")).FirstOrDefault();
             if (target == null) return null;
+            target += "/";
             foreach (var (path, c) in shaderColors)
-                if (path.StartsWith(target + "/")) return new((float)c[0], (float)c[1], (float)c[2], 1);
+                if (path.StartsWith(target, StringComparison.Ordinal)) return new((float)c[0], (float)c[1], (float)c[2], 1);
             return null;
         }
 
@@ -389,10 +426,9 @@ static class Usd
                     int j = Array.IndexOf(joints, animJoints[k]);
                     if (j < 0) continue;
                     nodes[j].Times = times;
+                    Matrix4x4.Decompose(rest[j], out var s0, out var q0, out var t0);
                     nodes[j].Locals = times.Select((_, i) =>
                     {
-                        var rest4 = rest[j];
-                        Matrix4x4.Decompose(rest4, out var s0, out var q0, out var t0);
                         var s = sc[i].Length >= 3 * (k + 1) ? new Vector3((float)sc[i][3 * k], (float)sc[i][3 * k + 1], (float)sc[i][3 * k + 2]) : s0;
                         var q = r[i].Length >= 4 * (k + 1) ? new Quaternion((float)r[i][4 * k + 1], (float)r[i][4 * k + 2], (float)r[i][4 * k + 3], (float)r[i][4 * k]) : q0; // (real, i, j, k)
                         var t = tr[i].Length >= 3 * (k + 1) ? new Vector3((float)tr[i][3 * k], (float)tr[i][3 * k + 1], (float)tr[i][3 * k + 2]) : t0;
@@ -442,8 +478,8 @@ static class Usd
         Func<string, string, Spec?> attr, Func<Spec?, (double[] Times, object?[] Values)> samples)
     {
         var node = new AnimNode { Parent = parent, Inherits = !order.Contains("!resetXformStack!") };
-        var ops = order.Where(o => o.StartsWith("xformOp:") || o.StartsWith("!invert!"))
-            .Select(o => (Name: o.Replace("!invert!", ""), Invert: o.StartsWith("!invert!")))
+        var ops = order.Where(o => o.StartsWith("xformOp:", StringComparison.Ordinal) || o.StartsWith("!invert!", StringComparison.Ordinal))
+            .Select(o => (Name: o.Replace("!invert!", ""), Invert: o.StartsWith("!invert!", StringComparison.Ordinal)))
             .Select(o => (o.Name, o.Invert, S: samples(attr(prim, o.Name))))
             .ToList();
         var times = ops.SelectMany(o => o.S.Times).Distinct().Order().DefaultIfEmpty(0).ToArray();
@@ -475,7 +511,7 @@ static class Usd
         if (kind == "rotateY") return Matrix4x4.CreateRotationY(R(0));
         if (kind == "rotateZ") return Matrix4x4.CreateRotationZ(R(0));
         if (kind == "orient" && v.Length >= 4) return Matrix4x4.CreateFromQuaternion(new(F(1), F(2), F(3), F(0))); // USD quat is (real, i, j, k)
-        if (kind.StartsWith("rotate") && kind.Length == 9)
+        if (kind.StartsWith("rotate", StringComparison.Ordinal) && kind.Length == 9)
         {
             // rotateXYZ etc: angles per axis, the first letter's rotation is applied first.
             var m = Matrix4x4.Identity;
@@ -491,9 +527,9 @@ static class Usd
 
     // ================================================================ .usda text
 
-    sealed class Usda(string text)
+    sealed class Usda(string text, string? target = null, Dictionary<string, object?>? sel = null)
     {
-        int _p;
+        int _p, _depth;
         readonly Dictionary<string, Spec> _specs = [];
 
         public Dictionary<string, Spec> Parse()
@@ -579,6 +615,8 @@ static class Usd
             Expect("=");
             var spec = _specs[prim];
             var selection = (spec.Fields.GetValueOrDefault("variants") as Dictionary<string, object?>)?.GetValueOrDefault(set) as string;
+            // A selection made by the prim that references this one is stronger than the layer's own.
+            if (sel?.GetValueOrDefault(set) is string { Length: > 0 } s && prim == (target ?? DefaultPrim(_specs))) selection = s;
             Expect("{");
             bool first = true, taken = false;
             while (Peek() != "}")
@@ -590,7 +628,9 @@ static class Usd
                 if (!use) { Skip(); continue; }
                 taken = true;
                 Expect("{");
+                if (++_depth > MaxDepth) throw new Exception(".usda: nested too deep");
                 while (Peek() != "}") Member(prim);
+                _depth--;
                 Expect("}");
             }
             Expect("}");
@@ -609,7 +649,9 @@ static class Usd
             if (type != "") spec.Fields["typeName"] = type; // untyped "def"/"over" mustn't hide a type set elsewhere
             if (Peek() == "(") Metadata(spec);
             Expect("{");
+            if (++_depth > MaxDepth) throw new Exception(".usda: nested too deep");
             while (Peek() != "}") Member(path);
+            _depth--;
             Expect("}");
         }
 
@@ -635,8 +677,8 @@ static class Usd
             if (Peek() == "[") { Next(); Expect("]"); typeName += "[]"; }
             var attrName = Next();
             string field = "default";
-            if (attrName.EndsWith(".timeSamples")) { attrName = attrName[..^12]; field = "timeSamples"; }
-            else if (attrName.EndsWith(".connect")) { attrName = attrName[..^8]; field = "connect"; }
+            if (attrName.EndsWith(".timeSamples", StringComparison.Ordinal)) { attrName = attrName[..^12]; field = "timeSamples"; }
+            else if (attrName.EndsWith(".connect", StringComparison.Ordinal)) { attrName = attrName[..^8]; field = "connect"; }
             var key = prim + "." + attrName;
             if (!_specs.TryGetValue(key, out var a)) _specs[key] = a = new Spec { Kind = "attr" };
             a.Fields["typeName"] = typeName;
@@ -663,6 +705,8 @@ static class Usd
             return r;
         }
 
+        const int MaxDepth = 256; // nested prims / values; a hostile file would otherwise overflow the stack
+
         object? Value()
         {
             var t = Next();
@@ -670,6 +714,7 @@ static class Usd
             {
                 case "(":
                 case "[":
+                    if (++_depth > MaxDepth) throw new Exception(".usda: nested too deep");
                     var close = t == "(" ? ")" : "]";
                     var list = new List<object?>();
                     while (Peek() != close)
@@ -678,9 +723,13 @@ static class Usd
                         if (Peek() == ",") Next();
                     }
                     Next();
+                    _depth--;
+                    // Plain numbers (points, indices, weights) are kept unboxed: a third of the memory.
+                    if (list.Count > 0 && list.TrueForAll(x => x is double)) return list.ConvertAll(x => (double)x!).ToArray();
                     return list;
                 case "{":
                     // Dictionary: "type name = value" entries (variant selections, customData, assetInfo).
+                    if (++_depth > MaxDepth) throw new Exception(".usda: nested too deep");
                     var dict = new Dictionary<string, object?>();
                     while (Peek() != "}")
                     {
@@ -692,6 +741,7 @@ static class Usd
                         dict[key] = Value();
                     }
                     Next();
+                    _depth--;
                     return dict;
                 case "None": return null;
                 case "true": return true;
@@ -787,12 +837,13 @@ static class Usd
         uint U32(long p) => BinaryPrimitives.ReadUInt32LittleEndian(_d.AsSpan((int)p));
 
         // Paths are stored as a pre-order tree walk: jump > 0 means a sibling at +jump; -1 child only; -2 leaf.
-        void BuildPaths(int[] pathIdx, int[] elemTok, int[] jumps, int cur, string? parent)
+        // Siblings are looped over and only children recurse, so the stack grows with the depth, not the prim count.
+        void BuildPaths(int[] pathIdx, int[] elemTok, int[] jumps, int cur, string? parent, int depth = 0)
         {
-            bool hasChild, hasSibling;
-            do
+            if (depth > 512) throw new Exception("USD crate: paths nested too deep");
+            for (bool hasSibling = true; hasSibling;)
             {
-                int i = cur++;
+                int i = cur;
                 string path;
                 if (parent == null) path = "/";
                 else
@@ -802,14 +853,11 @@ static class Usd
                     path = tok < 0 ? parent + "." + name : (parent == "/" ? "/" : parent + "/") + name;
                 }
                 _paths[pathIdx[i]] = path;
-                hasChild = jumps[i] > 0 || jumps[i] == -1;
+                bool hasChild = jumps[i] > 0 || jumps[i] == -1;
                 hasSibling = jumps[i] >= 0;
-                if (hasChild)
-                {
-                    if (hasSibling) BuildPaths(pathIdx, elemTok, jumps, i + jumps[i], parent);
-                    parent = path;
-                }
-            } while (hasChild || hasSibling);
+                if (hasChild) BuildPaths(pathIdx, elemTok, jumps, i + 1, path, depth + 1);
+                cur = hasChild ? i + jumps[i] : i + 1;
+            }
         }
 
         public Dictionary<string, Spec> Specs()
@@ -901,10 +949,12 @@ static class Usd
 
         object? Array(int type, long p, bool compressed)
         {
+            if (p == 0) return new double[0]; // an empty array has no payload: offset 0 is the file header, not a count
             bool wideCount = _major > 0 || _minor >= 7;
             long n = wideCount ? (long)U64(p) : U32(p);
             p += wideCount ? 8 : 4;
             if (n == 0) return new double[0];
+            if (n < 0 || n > _d.Length && !compressed) throw new Exception("USD crate: array longer than the file");
             if (compressed)
             {
                 if (type is 3 or 4) return CompressedInts(ref p, (int)n);

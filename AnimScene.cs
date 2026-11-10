@@ -90,18 +90,19 @@ sealed class Skin
     public bool Constant;
     public Matrix4x4 GeomBind = Matrix4x4.Identity;
     public int[]? JointMap;
+    Vector3[] _result = []; // reused every frame: the deformed points are only valid until the next Deform
 
     public Vector3[] Deform(Vector3[] rest, double t)
     {
         var xf = Skeleton.Transforms(t);
-        var result = new Vector3[rest.Length];
+        var result = _result.Length == rest.Length ? _result : _result = new Vector3[rest.Length];
         Parallel.For(0, rest.Length, i =>
         {
             var p = Vector3.Transform(rest[i], GeomBind);
             int o = Constant ? 0 : i * Influences;
             Vector3 acc = default;
             float total = 0;
-            for (int k = 0; k < Influences && o + k < Indices.Length; k++)
+            for (int k = 0; k < Influences && o + k < Indices.Length && o + k < Weights.Length; k++)
             {
                 float w = Weights[o + k];
                 if (w == 0) continue;
@@ -169,7 +170,8 @@ sealed class AnimScene
         int o = 0;
         foreach (var n in counts)
         {
-            for (int k = 1; k + 1 < n; k++) tris.AddRange([indices[o], indices[o + k], indices[o + k + 1]]);
+            if (n < 0 || o + n > indices.Length) break; // counts and indices disagree (corrupt file): keep the faces that fit
+            for (int k = 1; k + 1 < n; k++) { tris.Add(indices[o]); tris.Add(indices[o + k]); tris.Add(indices[o + k + 1]); }
             o += n;
         }
         return [.. tris];

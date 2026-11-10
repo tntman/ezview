@@ -74,6 +74,7 @@ partial class ModelView
 
     static void Triangle(Part part, int i0, int i1, int i2, Vector3[] s, Vector3[] nrm, Vector3 light, float[] depth, byte[] color, int W, int H)
     {
+        if ((uint)i0 >= s.Length || (uint)i1 >= s.Length || (uint)i2 >= s.Length) return;
         Vector3 a = s[i0], b = s[i1], c = s[i2];
         if (float.IsNaN(a.X) || float.IsNaN(b.X) || float.IsNaN(c.X)) return;
         float area = (b.X - a.X) * (c.Y - a.Y) - (b.Y - a.Y) * (c.X - a.X);

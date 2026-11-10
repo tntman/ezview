@@ -28,6 +28,9 @@ static class SelfTest
         Trace.Assert(gap.LastFrame == 1005 && gap.Name == "gap.[1001–1005].exr", gap.Name);
         var stamps = Media.Group([d + "cam.20231015120000.jpg", d + "cam.20231015120001.jpg"]);
         Trace.Assert(stamps.Count == 2 && stamps.All(e => !e.IsSequence), string.Join(", ", stamps.Select(e => e.Name)));
+        // Unpadded numbers are one sequence across widths and continue a zero-padded one; two paddings stay two sequences.
+        var loose = Media.Group([d + "a.9.exr", d + "a.10.exr", d + "a.11.exr", d + "b.0999.exr", d + "b.1000.exr", d + "c.01.exr", d + "c.02.exr", d + "c.001.exr", d + "c.002.exr"]);
+        Trace.Assert(loose.Count == 4 && loose.All(e => e.IsSequence) && loose[0].Name == "a.[9–11].exr" && loose[1].Name == "b.[999–1000].exr", string.Join(", ", loose.Select(e => e.Name)));
         // HDR: a linear red of 4.0 clips at 0 EV and comes back at −3 EV; linear 0.5 shows as sRGB 188. 8-bit passes through.
         var hdr = new Source([], [4f, 0.5f, 0f, 1f], true, 1, 1);
         var at0 = ImageView.Adjust(hdr, 0, 0, 1);

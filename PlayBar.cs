@@ -28,6 +28,7 @@ interface IPlayback
 // Bottom player bar for video/audio/sequences: title, prev/play/next, progress + frame, loop, volume.
 class PlayBar : Border
 {
+    static readonly double[] StandardFps = [23.976, 24, 25, 29.97, 30, 48, 50, 59.94, 60, 120];
     readonly Func<IPlayback?> _player;
     readonly TextBlock _title = new() { Foreground = Ui.Text, FontSize = 13, FontWeight = FontWeight.Bold, TextTrimming = TextTrimming.CharacterEllipsis };
     readonly TextBlock _sub = new() { Foreground = Ui.Muted, FontSize = 11, Margin = new(0, 2, 0, 0), TextTrimming = TextTrimming.CharacterEllipsis };
@@ -145,7 +146,7 @@ class PlayBar : Border
         {
             // Containers without a stored rate (some mkv): mpv's measured rate, snapped to a standard one when close.
             fps = v.Get("estimated-vf-fps");
-            foreach (var std in new[] { 23.976, 24, 25, 29.97, 30, 48, 50, 59.94, 60, 120 })
+            foreach (var std in StandardFps)
                 if (Math.Abs(fps - std) < std * 0.002) fps = std;
         }
         _sub.Text = _baseSub + (w > 0 ? $"  ·  {w} × {h}" : "") + (fps > 0 ? $"  ·  {fps:0.###} fps" : "") + (Math.Abs(speed - 1) > 0.01 ? $"  ·  {speed:0.##}×" : "");

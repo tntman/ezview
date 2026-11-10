@@ -19,9 +19,10 @@ static class Alembic
         public ulong[] Children(ulong group)
         {
             if (group == 0 || (group & DataBit) != 0) return [];
-            var n = (int)U64((long)group);
+            ulong len = (ulong)d.Length, n = group + 8 <= len ? U64((long)group) : ulong.MaxValue;
+            if (n > (len - group - 8) / 8) throw new Exception("Corrupt Alembic file"); // the child table must fit in the file
             var r = new ulong[n];
-            for (int i = 0; i < n; i++) r[i] = U64((long)group + 8 + 8L * i);
+            for (int i = 0; i < r.Length; i++) r[i] = U64((long)group + 8 + 8L * i);
             return r;
         }
 
@@ -34,7 +35,11 @@ static class Alembic
         }
     }
 
-    record Prop(string Name, int Type, int Pod, int Extent, int NumSamples, int First, int Last, int Ts, string Meta, ulong Child);
+    record Prop(string Name, int Type, int Pod, int Extent, int NumSamples, int First, int Last, int Ts, string Meta, ulong Child)
+    {
+        // Samples worth reading: a constant property repeats one value however many samples it declares.
+        public int Count => First == 0 && Last == 0 ? 1 : Math.Max(1, NumSamples);
+    }
 
     sealed class Reader
     {
@@ -47,6 +52,7 @@ static class Alembic
             if (bytes.Length < 16 || Encoding.ASCII.GetString(bytes, 0, 5) != "Ogawa") throw new Exception("Not an Ogawa Alembic file (HDF5 Alembic isn't supported)");
             O = new Ogawa(bytes);
             var root = O.Children(O.Root);
+            if (root.Length < 6) throw new Exception("Corrupt Alembic file");
             ReadSamplings(O.Data(root[4]));
             var meta = O.Data(root[5]);
             for (int p = 0; p < meta.Length;)
@@ -64,6 +70,7 @@ static class Alembic
                 p += 4; // max sample
                 var tpc = BinaryPrimitives.ReadDoubleLittleEndian(s[p..]); p += 8;
                 var n = BinaryPrimitives.ReadInt32LittleEndian(s[p..]); p += 4;
+                if (n < 0 || n > (s.Length - p) / 8) break;
                 var times = new double[n];
                 for (int i = 0; i < n; i++, p += 8) times[i] = BinaryPrimitives.ReadDoubleLittleEndian(s[p..]);
                 Samplings.Add((tpc, times));
@@ -184,24 +191,30 @@ static class Alembic
 
     static double GuessFps(Reader r, AnimScene s)
     {
-        var tpc = r.Samplings.Select(x => x.Tpc).Where(t => t > 1e-6 && t < 1e30).DefaultIfEmpty(1 / 24.0).Min();
+        // The first sampling is the archive's built-in one-per-second default, not a frame rate.
+        var tpc = r.Samplings.Skip(1).Select(x => x.Tpc).Where(t => t > 1e-6 && t < 1e30).DefaultIfEmpty(1 / 24.0).Min();
         return Math.Round(1 / tpc, 3);
     }
 
-    static void Walk(Reader r, ulong objGroup, AnimNode? parent, AnimScene scene, string path, OutlineNode outParent)
+    // open: the object groups on the way down. A corrupt file can nest endlessly or point a child back at its
+    // parent: that must fail the load, not overflow the stack.
+    static void Walk(Reader r, ulong objGroup, AnimNode? parent, AnimScene scene, string path, OutlineNode outParent, HashSet<ulong>? open = null)
     {
+        open ??= [];
+        if (open.Count > 256 || !open.Add(objGroup)) throw new Exception("Corrupt Alembic file: the object hierarchy is cyclic or too deep");
         foreach (var child in Children(r, objGroup))
         {
             var schema = Schema(child.Meta);
             var outline = outParent.Add(child.Name, schema.Replace("AbcGeom_", "").Split('_')[0]);
             var props = r.Props(r.O.Children(child.Group).FirstOrDefault());
             var node = parent;
-            if (schema.StartsWith("AbcGeom_Xform"))
+            if (schema.StartsWith("AbcGeom_Xform", StringComparison.Ordinal))
                 node = ReadXform(r, props, parent);
-            else if (schema.StartsWith("AbcGeom_PolyMesh") || schema.StartsWith("AbcGeom_SubD"))
+            else if (schema.StartsWith("AbcGeom_PolyMesh", StringComparison.Ordinal) || schema.StartsWith("AbcGeom_SubD", StringComparison.Ordinal))
                 ReadMesh(r, props, node ?? new AnimNode(), scene, path + "/" + child.Name, outline);
-            Walk(r, child.Group, node, scene, path + "/" + child.Name, outline);
+            Walk(r, child.Group, node, scene, path + "/" + child.Name, outline, open);
         }
+        open.Remove(objGroup);
     }
 
     static AnimNode ReadXform(Reader r, List<Prop> props, AnimNode? parent)
@@ -215,7 +228,7 @@ static class Alembic
         if (sub.FirstOrDefault(p => p.Name == ".inherits") is { } inh && r.Sample(inh, 0) is { Length: > 0 } ib) node.Inherits = ib[0] != 0;
         if (ops == null || vals == null) return node;
         var opCodes = r.Sample(ops, 0).ToArray();
-        int n = Math.Max(1, vals.NumSamples);
+        int n = vals.Count;
         node.Times = new double[n];
         node.Locals = new Matrix4x4[n];
         for (int i = 0; i < n; i++)
@@ -288,7 +301,7 @@ static class Alembic
         if (P == null || fi == null || fc == null) return;
         // ponytail: topology taken from sample 0; meshes whose face layout changes per frame play with frame 0's faces
         var tris = AnimScene.Triangulate(Ints(r.Sample(fc, 0)), Ints(r.Sample(fi, 0)));
-        int n = Math.Max(1, P.NumSamples);
+        int n = P.Count;
         var times = new double[n];
         var points = new Vector3[n][];
         for (int i = 0; i < n; i++)

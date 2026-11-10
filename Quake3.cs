@@ -36,7 +36,8 @@ static class Quake3
         // Loose .bsp: textures are relative to the game folder, the parent of "maps".
         var dir = Path.GetDirectoryName(Path.GetFullPath(path))!;
         var root = Path.GetFileName(dir).Equals("maps", StringComparison.OrdinalIgnoreCase) ? Path.GetDirectoryName(dir)! : dir;
-        return Parse(File.ReadAllBytes(path), n => File.Exists(Path.Combine(root, n)) ? File.ReadAllBytes(Path.Combine(root, n)) : null, Path.GetFileName(path));
+        byte[]? Loose(string n) => Path.Combine(root, n) is var f && !ModelView.OffShare(f, root) && File.Exists(f) ? File.ReadAllBytes(f) : null;
+        return Parse(File.ReadAllBytes(path), Loose, Path.GetFileName(path));
     }
 
     static (List<Surface>, List<(string, string)>) Parse(byte[] d, Func<string, byte[]?> read, string name)
@@ -83,7 +84,7 @@ static class Quake3
         var groups = new Dictionary<(int Tex, int Lm), (List<float> V, List<float> L, List<uint> I)>();
         void Add((List<float> V, List<float> L, List<uint> I) g, float[] a)
         {
-            g.V.AddRange(a.AsSpan(0, 8).ToArray());
+            g.V.AddRange(new ReadOnlySpan<float>(a, 0, 8));
             g.L.Add(a[8]); g.L.Add(a[9]);
         }
 
@@ -101,13 +102,20 @@ static class Quake3
             uint baseIdx = (uint)(g.V.Count / 8);
             if (type is 1 or 3)
             {
-                for (int i = 0; i < count && first + i < nv; i++) Add(g, Attr(first + i));
-                for (int i = 0; i < nmv; i++) g.I.Add(baseIdx + (uint)meshVerts[mv + i]);
+                int n = first < 0 ? 0 : Math.Min(count, nv - first); // the vertices that really exist
+                for (int i = 0; i < n; i++) Add(g, Attr(first + i));
+                for (int i = 0; mv >= 0 && i + 2 < nmv && mv + i + 2 < meshVerts.Length; i += 3)
+                {
+                    // A corrupt map must not hand the GPU an index past the face's own vertices.
+                    int a = meshVerts[mv + i], b = meshVerts[mv + i + 1], c = meshVerts[mv + i + 2];
+                    if ((uint)a < n && (uint)b < n && (uint)c < n) g.I.AddRange((ReadOnlySpan<uint>)[baseIdx + (uint)a, baseIdx + (uint)b, baseIdx + (uint)c]);
+                }
             }
             else if (type == 2)
             {
                 patches++;
-                Patch(g, first, I(d, o + 96), I(d, o + 100), Attr);
+                int w = I(d, o + 96), h = I(d, o + 100);
+                if (first >= 0 && w > 0 && h > 0 && (long)w * h <= nv - first) Patch(g, first, w, h, Attr);
             }
         }
 
@@ -181,14 +189,14 @@ static class Quake3
                             }
                         float len = MathF.Sqrt(p[3] * p[3] + p[4] * p[4] + p[5] * p[5]);
                         if (len > 0) { p[3] /= len; p[4] /= len; p[5] /= len; }
-                        g.V.AddRange(p.AsSpan(0, 8).ToArray());
+                        g.V.AddRange(new ReadOnlySpan<float>(p, 0, 8));
                         g.L.Add(p[8]); g.L.Add(p[9]);
                     }
                 for (int a = 0; a < L; a++)
                     for (int b = 0; b < L; b++)
                     {
                         uint i0 = baseIdx + (uint)(a * (L + 1) + b), i1 = i0 + 1, i2 = i0 + L + 1, i3 = i2 + 1;
-                        g.I.AddRange([i0, i2, i1, i1, i2, i3]);
+                        g.I.AddRange((ReadOnlySpan<uint>)[i0, i2, i1, i1, i2, i3]);
                     }
             }
     }

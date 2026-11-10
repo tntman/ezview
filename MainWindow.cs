@@ -89,7 +89,8 @@ class MainWindow : Window
         _host.Children.Add(_image);
         _host.Children.Add(_msg);
         _keysView = KeysView();
-        _gallery = new Gallery(this, i => { _index = i; _ = ShowCurrent(); });
+        // By entry, not position: the queue may have changed while the gallery was open.
+        _gallery = new Gallery(this, e => { if (_queue.IndexOf(e) is var i and >= 0) { _index = i; _ = ShowCurrent(); } });
         Content = new Panel { Children = { _host, _queuePanel.View, _outliner.View, _aovPanel.View, _info.View, _imagePanel.View, _overlay, _gallery.View, _keysView } };
 
         AddHandler(KeyDownEvent, OnKey, Avalonia.Interactivity.RoutingStrategies.Tunnel);
@@ -154,11 +155,33 @@ class MainWindow : Window
         ShowMessage("Drop a file here or press Ctrl+O");
         SingleInstance.Listen(p =>
         {
-            Open(p);
+            OpenFromShell(p);
             if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
             Activate();
         });
-        Opened += (_, _) => { if (startFile != null) Open(startFile); };
+        Opened += (_, _) => { if (startFile != null) OpenFromShell(startFile); };
+    }
+
+    // Several files opened at once in Explorer arrive one at a time (one ezview.exe each). The first opens with its
+    // folder as the queue; those that follow within a second make the queue just the files picked.
+    readonly List<string> _burst = [];
+    DateTime _burstAt;
+
+    void OpenFromShell(string path)
+    {
+        if ((DateTime.Now - _burstAt).TotalSeconds > 1) _burst.Clear();
+        _burstAt = DateTime.Now;
+        _burst.Add(path);
+        if (_burst.Count == 1) { Open(path); return; }
+        var entries = Entries(_burst);
+        if (entries.Count == 0) return;
+        _openId++;
+        var shown = Current;
+        _queue = entries;
+        _index = shown == null ? -1 : _queue.IndexOf(shown);
+        if (_index >= 0) { RefreshQueue(); return; } // the file on screen stays, only the queue around it changed
+        _index = 0;
+        _ = ShowCurrent();
     }
 
     // Image zoom pill at the bottom: − 100 % + | Fit | 1:1 (fades with the bars).
@@ -338,12 +361,18 @@ class MainWindow : Window
 
     // ---- Queue ----
 
-    void Open(string path)
+    int _openId; // a newer open or queue wins over a folder still being listed
+
+    async void Open(string path)
     {
         path = Path.GetFullPath(path);
         if (Directory.Exists(path)) { ReplaceQueue([path]); return; } // a folder: everything in it
         path = Media.MdlCompanionBase(path) ?? path; // manT.mdl / man01.mdl open their main model
-        _queue = Media.Group(FilesIn(Path.GetDirectoryName(path)!));
+        var id = ++_openId;
+        // Listed off the UI thread: a folder of sequences on a network share takes a while.
+        var queue = await Task.Run(() => Media.Group(FilesIn(Path.GetDirectoryName(path)!)));
+        if (id != _openId) return;
+        _queue = queue;
         _index = _queue.FindIndex(e => Same(e.Path, path) || e.Frames?.Any(f => Same(f, path)) == true);
         if (_index < 0) { _queue = [new Entry(path)]; _index = 0; }
         _ = ShowCurrent();
@@ -365,6 +394,7 @@ class MainWindow : Window
     {
         var entries = Entries(files);
         if (entries.Count == 0) { if (_queue.Count == 0) ShowMessage("Nothing here ezview can open"); return; }
+        _openId++;
         _queue = entries;
         _index = 0;
         _ = ShowCurrent();
@@ -450,13 +480,15 @@ class MainWindow : Window
             switch (kind)
             {
                 case Kind.Image:
-                    await _image.Load(entry.Path);
-                    _layers = await Task.Run(() => Exr.Layers(entry.Path));
+                    _layers = null; // the previous file's AOVs can't be picked while this one loads
+                    await _image.Load(entry.Path, _aov);
+                    var layers = await Task.Run(() => Exr.Layers(entry.Path));
                     if (Current != entry) return;
-                    if (_aov != null && _layers?.Any(l => l.Layer == _aov) == true) await PickAov(_aov, show: false);
+                    _layers = layers;
+                    // Load went straight to the picked AOV when the file has it; if it couldn't, PickAov says why.
+                    if (_aov != null && _image.Layer != _aov && layers?.Any(l => l.Layer == _aov) == true) await PickAov(_aov, show: false);
                     RefreshAovs();
-                    _image.Prefetch(new[] { _index + 1, _index - 1 }
-                        .Where(i => i >= 0 && i < _queue.Count && _queue[i].Kind == Kind.Image && !_queue[i].IsSequence).Select(i => _queue[i].Path));
+                    PrefetchNeighbours();
                     break;
                 case Kind.Video:
                     _loadedAt = DateTime.Now;
@@ -496,6 +528,10 @@ class MainWindow : Window
         RefreshInfo();
         Poke();
     }
+
+    // Decoded ahead on the AOV picked, so stepping through renders stays on that pass.
+    void PrefetchNeighbours() => _image.Prefetch(new[] { _index + 1, _index - 1 }
+        .Where(i => i >= 0 && i < _queue.Count && _queue[i].Kind == Kind.Image && !_queue[i].IsSequence).Select(i => _queue[i].Path), _aov);
 
     void SetKind(Kind kind)
     {
@@ -666,7 +702,10 @@ class MainWindow : Window
 
     // ---- Sequence as single images: its frames take its place in the queue, opened at the frame on screen ----
 
-    Entry? _expanded; // the sequence last split into images, so it can be played again
+    readonly List<Entry> _expanded = []; // sequences split into images, so they can be played again
+
+    // The split sequence a single image belongs to.
+    Entry? ExpandedAt(Entry? e) => e is { IsSequence: false } ? _expanded.Find(s => s.Frames!.Contains(e.Path)) : null;
 
     void ExpandSequence(int frame)
     {
@@ -674,20 +713,20 @@ class MainWindow : Window
         var at = Math.Max(0, Array.FindIndex(seq.Frames!, f => Media.FrameNumber(f) == frame));
         _queue.RemoveAt(_index);
         _queue.InsertRange(_index, seq.Frames!.Select(f => new Entry(f)));
-        _expanded = seq;
+        _expanded.Add(seq);
         _index += at;
         _ = ShowCurrent();
     }
 
     void CollapseSequence()
     {
-        if (_expanded is not { } seq) return;
-        var start = _queue.FindIndex(e => seq.Frames!.Contains(e.Path));
-        if (start < 0) return;
-        _queue.RemoveAll(e => !e.IsSequence && seq.Frames!.Contains(e.Path));
+        if (ExpandedAt(Current) is not { } seq) return;
+        var frames = seq.Frames!.ToHashSet();
+        var start = _queue.FindIndex(e => !e.IsSequence && frames.Contains(e.Path));
+        _queue.RemoveAll(e => !e.IsSequence && frames.Contains(e.Path));
         _queue.Insert(start, seq);
         _index = start;
-        _expanded = null;
+        _expanded.Remove(seq);
         _ = ShowCurrent();
     }
 
@@ -703,8 +742,14 @@ class MainWindow : Window
         _aov = layer == _layers[0].Layer ? null : layer;
         if (show && !_aovPanel.View.IsVisible) TogglePanel(_aovPanel.View);
         try { await _image.ShowLayer(_aov); }
-        catch (Exception ex) when (Current == entry) { ShowMessage($"Can't show {layer}: {ex.Message}"); }
+        catch (Exception ex) when (Current == entry)
+        {
+            _aov = _image.Layer; // back to the AOV on screen: the list and the next file don't follow one that can't be read
+            ShowMessage($"Can't show {layer}: {ex.Message}");
+        }
+        if (Current != entry) return;
         RefreshAovs();
+        PrefetchNeighbours();
     }
 
     void StepAov(int d)
@@ -789,7 +834,7 @@ class MainWindow : Window
             items.Add(Item("\uE8AB", "Flip horizontal", _image.FlipHorizontal, "Shift+F"));
             items.Add(Item("\uE8AB", "Flip vertical", _image.FlipVertical));
             items.Add(Sub("\uE8A9", "Compare", CompareItems()));
-            if (_expanded != null && entry != null && _expanded.Frames!.Contains(entry.Path)) items.Add(Item("\uE714", "Play as sequence", CollapseSequence));
+            if (ExpandedAt(entry) != null) items.Add(Item("\uE714", "Play as sequence", CollapseSequence));
             if (_layers != null)
                 items.Add(Sub("\uE81E", "AOVs", _layers.Select(l => Choice(l.Layer.Length == 0 ? "RGBA" : l.Layer, () => _ = PickAov(l.Layer), l.Layer == ShownAov))));
             items.Add(Item("\uE790", "Adjust image\u2026", () => TogglePanel(_imagePanel.View), "E", _imagePanel.View.IsVisible || _image.Adjusted));
@@ -845,7 +890,7 @@ class MainWindow : Window
 
     // ---- Info ----
 
-    (Entry Entry, long Bytes) _sizeOf;
+    (Entry? Entry, Task<long> Bytes) _sizeOf = (null, Task.FromResult(0L));
 
     async void RefreshInfo()
     {
@@ -855,14 +900,15 @@ class MainWindow : Window
         try
         {
             var fi = new FileInfo(entry.Path);
-            // A sequence's size is thousands of file lookups: once per entry, not on every refresh while it plays.
-            if (_sizeOf.Entry != entry) _sizeOf = (entry, (entry.Frames ?? [entry.Path]).Sum(f => new FileInfo(f) is { Exists: true } x ? x.Length : 0));
+            // A sequence's size is thousands of file lookups: once per entry and off the UI thread, not on every refresh while it plays.
+            if (_sizeOf.Entry != entry) _sizeOf = (entry, Task.Run(() => (entry.Frames ?? [entry.Path]).Sum(f => new FileInfo(f) is { Exists: true } x ? x.Length : 0)));
+            long bytes = await _sizeOf.Bytes;
             var sections = new List<(string, List<(string, string)>)>
             {
                 ("File", [
                     ("Name", entry.Name),
                     ("Folder", fi.DirectoryName ?? ""),
-                    ("Size", Media.Size(_sizeOf.Bytes)),
+                    ("Size", Media.Size(bytes)),
                     ("Modified", fi.LastWriteTime.ToString("yyyy-MM-dd HH:mm")),
                     ("Created", fi.CreationTime.ToString("yyyy-MM-dd HH:mm")),
                 ]),
@@ -872,7 +918,7 @@ class MainWindow : Window
             else if (_kind == Kind.Model && _model != null) sections.Add(("3D model", _model.Info));
             if (id == _infoId) _info.Show(sections);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ImageMagick.MagickException)
+        catch (Exception)
         {
             // The file vanished or can't be read: the info panel just stays as it was (async void must not throw).
         }
@@ -999,6 +1045,8 @@ class MainWindow : Window
         if (wasHidden && Player != null) _bottom.Update();
     }
 
+    static readonly Cursor NoCursor = new(StandardCursorType.None);
+
     void HideOverlay()
     {
         if (_queue.Count == 0 || _menuOpen || IsAudio || _top.IsPointerOver || _bottom.IsPointerOver || _zoomBar.IsPointerOver || _gallery.View.IsVisible || _keysView.IsVisible) return;
@@ -1006,6 +1054,6 @@ class MainWindow : Window
         _overlay.Opacity = 0;
         _overlay.IsHitTestVisible = false;
         // Keep the cursor while it's over an open side panel, and while inspecting an image.
-        if (!_imagePanel.View.IsVisible && !_queuePanel.View.IsPointerOver && !_outliner.View.IsPointerOver && !_aovPanel.View.IsPointerOver && !_info.View.IsPointerOver && !_imagePanel.View.IsPointerOver) Cursor = new Cursor(StandardCursorType.None);
+        if (!_imagePanel.View.IsVisible && !_queuePanel.View.IsPointerOver && !_outliner.View.IsPointerOver && !_aovPanel.View.IsPointerOver && !_info.View.IsPointerOver && !_imagePanel.View.IsPointerOver) Cursor = NoCursor;
     }
 }

@@ -18,8 +18,8 @@ class Gallery
     readonly ScrollViewer _scroll;
     readonly TextBlock _title = new() { FontSize = 15, FontWeight = FontWeight.Bold, Foreground = Ui.Text, VerticalAlignment = VerticalAlignment.Center };
     readonly TextBlock _count = new() { FontSize = 12.5, Foreground = Ui.Muted, Margin = new(12, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
-    readonly Dictionary<string, Bitmap?> _thumbs = new(StringComparer.OrdinalIgnoreCase);
-    readonly Action<int> _open;
+    Dictionary<string, Bitmap?> _thumbs = new(StringComparer.OrdinalIgnoreCase);
+    readonly Action<Entry> _open;
     int _generation;
     string? _folder;
     public DateTime ClosedAt { get; private set; }
@@ -27,7 +27,7 @@ class Gallery
     static readonly SemaphoreSlim ModelLane = new(1);
     const int ThumbSize = 320;
 
-    public Gallery(Window window, Action<int> open)
+    public Gallery(Window window, Action<Entry> open)
     {
         _open = open;
         var close = new Button
@@ -55,16 +55,19 @@ class Gallery
         var gen = ++_generation;
         var dir = queue.Count > 0 ? Path.GetDirectoryName(queue[0].Path) : null;
         // Thumbnails are kept while browsing one folder; a new folder starts a fresh cache.
-        if (!string.Equals(dir, _folder, StringComparison.OrdinalIgnoreCase)) { _thumbs.Clear(); _folder = dir; }
+        var old = _thumbs;
+        if (!string.Equals(dir, _folder, StringComparison.OrdinalIgnoreCase)) { _thumbs = new(StringComparer.OrdinalIgnoreCase); _folder = dir; }
         var folder = Path.GetFileName(dir);
         _title.Text = string.IsNullOrEmpty(folder) ? "Gallery" : folder;
         _count.Text = $"{queue.Count} {(queue.Count == 1 ? "file" : "files")}";
         _tiles.Children.Clear();
+        if (old != _thumbs) foreach (var b in old.Values) b?.Dispose(); // no tile shows them any more
+        var thumbs = _thumbs;
         var pending = new List<(Image Target, TextBlock Glyph, Entry Entry)>();
         Border? currentTile = null;
         for (int i = 0; i < queue.Count; i++)
         {
-            var (tile, image, glyph) = Tile(queue[i], i, i == current);
+            var (tile, image, glyph) = Tile(queue[i], i == current);
             _tiles.Children.Add(tile);
             if (i == current) currentTile = tile;
             if (Thumbnailable(queue[i]))
@@ -92,6 +95,7 @@ class Gallery
                     try { thumb = Thumb(key); } catch { } // unreadable: keeps its icon
                     Avalonia.Threading.Dispatcher.UIThread.Post(() =>
                     {
+                        if (thumbs != _thumbs) { thumb?.Dispose(); return; } // decoded for a folder that was left meanwhile
                         _thumbs[key] = thumb;
                         if (gen == _generation) SetThumb(target, glyph, thumb);
                     });
@@ -116,7 +120,7 @@ class Gallery
         glyph.IsVisible = thumb == null;
     }
 
-    (Border, Image, TextBlock) Tile(Entry entry, int index, bool isCurrent)
+    (Border, Image, TextBlock) Tile(Entry entry, bool isCurrent)
     {
         var image = new Image { Stretch = Stretch.Uniform };
         RenderOptions.SetBitmapInterpolationMode(image, BitmapInterpolationMode.HighQuality);
@@ -151,7 +155,7 @@ class Gallery
             if (!e.GetCurrentPoint(tile).Properties.IsLeftButtonPressed) return;
             e.Handled = true;
             Hide();
-            _open(index);
+            _open(entry);
         };
         return (tile, image, glyph);
     }

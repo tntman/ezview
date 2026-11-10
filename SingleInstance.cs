@@ -23,7 +23,7 @@ static class SingleInstance
         {
             AllowSetForegroundWindow(-1); // let the running window come to the front
             using var pipe = new NamedPipeClientStream(".", Name, PipeDirection.Out);
-            pipe.Connect(2000);
+            pipe.Connect(5000); // several files opened at once wait here while the first window starts
             pipe.Write(Encoding.UTF8.GetBytes(Path.GetFullPath(file)));
             return true;
         }
@@ -45,7 +45,8 @@ static class SingleInstance
                     var path = await reader.ReadToEndAsync();
                     if (path.Length > 0) Avalonia.Threading.Dispatcher.UIThread.Post(() => open(path));
                 }
-                catch (IOException) { return; } // another window already serves this name
+                // Another window serves this name, or a sender broke off: keep trying, so this window takes over when that one closes.
+                catch (IOException) { await Task.Delay(1000); }
             }
         });
     }

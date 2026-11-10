@@ -33,7 +33,9 @@ unsafe class VideoView : OpenGlControlBase, ICustomHitTest, IPlayback
     delegate nint GetProcFn(nint ctx, nint name);
     delegate void UpdateFn(nint ctx);
 
-    static byte[] U8(string s) => Encoding.UTF8.GetBytes(s + "\0");
+    // Property names are asked for on every tick: encoded once.
+    static readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte[]> Utf8 = new();
+    static byte[] U8(string s) => Utf8.GetOrAdd(s, x => Encoding.UTF8.GetBytes(x + "\0"));
 
     readonly nint _mpv;
     nint _ctx;
@@ -189,7 +191,15 @@ unsafe class VideoView : OpenGlControlBase, ICustomHitTest, IPlayback
         Command("set", "pause", "no");
     }
 
-    static readonly string SequenceList = Path.Combine(Path.GetTempPath(), "ezview-sequence.txt");
+    static readonly string SequenceList = TempList();
+
+    // One list per process, so two windows playing sequences don't overwrite each other's.
+    static string TempList()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"ezview-sequence-{Environment.ProcessId}.txt");
+        AppDomain.CurrentDomain.ProcessExit += (_, _) => { try { File.Delete(path); } catch (IOException) { } };
+        return path;
+    }
 
     // Image sequences play through mpv's mf:// demuxer from a list file, so every player feature works on them.
     // ponytail: no frame prefetch, 4K EXR may stutter; add a frame cache if it matters
